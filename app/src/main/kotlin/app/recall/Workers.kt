@@ -41,15 +41,19 @@ object Work {
         WorkManager.getInstance(context).enqueueUniqueWork(DOWNLOAD, ExistingWorkPolicy.KEEP, req)
     }
 
+    private fun indexRequest(context: Context) = OneTimeWorkRequestBuilder<IndexWorker>().apply {
+        if ((context.applicationContext as RecallApp).settings.chargingOnly) {
+            setConstraints(Constraints.Builder().setRequiresCharging(true).build())
+        }
+    }.build()
+
     fun startIndexing(context: Context) {
-        val req = OneTimeWorkRequestBuilder<IndexWorker>().build()
-        WorkManager.getInstance(context).enqueueUniqueWork(INDEX, ExistingWorkPolicy.KEEP, req)
+        WorkManager.getInstance(context).enqueueUniqueWork(INDEX, ExistingWorkPolicy.KEEP, indexRequest(context))
     }
 
-    /** Restarts indexing so changed settings (folders, dates, order, detail) take effect immediately. */
+    /** Restarts indexing so changed settings (folders, dates, order, detail, charging) take effect immediately. */
     fun restartIndexing(context: Context) {
-        val req = OneTimeWorkRequestBuilder<IndexWorker>().build()
-        WorkManager.getInstance(context).enqueueUniqueWork(INDEX, ExistingWorkPolicy.REPLACE, req)
+        WorkManager.getInstance(context).enqueueUniqueWork(INDEX, ExistingWorkPolicy.REPLACE, indexRequest(context))
     }
 
     fun stopIndexing(context: Context) {

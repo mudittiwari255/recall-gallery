@@ -1,3 +1,5 @@
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+
 package app.recall
 
 import android.Manifest
@@ -23,6 +25,7 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -52,11 +55,14 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DateRange
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
@@ -64,11 +70,14 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.InputChip
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.RangeSlider
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
@@ -112,8 +121,10 @@ import androidx.lifecycle.compose.LifecycleResumeEffect
 import coil3.compose.AsyncImage
 import java.text.NumberFormat
 import java.time.Instant
+import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import kotlin.math.roundToInt
 
 class MainActivity : ComponentActivity() {
     private val vm: MainViewModel by viewModels()
@@ -163,8 +174,8 @@ private val nf: NumberFormat = NumberFormat.getIntegerInstance()
 private val monthFormat: DateTimeFormatter = DateTimeFormatter.ofPattern("MMMM yyyy")
 
 private val suggestions = listOf(
-    "Receipts and bills", "Screenshots of chats", "Documents and IDs", "Food", "Sunset", "Selfies",
-    "Pets", "Whiteboard notes", "Mountains", "Beach", "Birthday cake", "Cars",
+    "Bills and receipts", "Screenshots of chats", "ID cards and documents", "Food", "Sunset", "Selfies",
+    "Pets", "Handwritten notes", "Mountains", "Beach", "Birthday cake", "Last month",
 )
 
 // ---------------------------------------------------------------------------- root
@@ -175,6 +186,7 @@ fun RecallScreen(vm: MainViewModel) {
     val s by vm.state.collectAsState()
     val snackbar = remember { SnackbarHostState() }
     var showSettings by remember { mutableStateOf(false) }
+    var showFilters by remember { mutableStateOf(false) }
 
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         vm.onPermissionResult()
@@ -193,6 +205,7 @@ fun RecallScreen(vm: MainViewModel) {
     LaunchedEffect(s.message) {
         s.message?.let { snackbar.showSnackbar(it); vm.messageShown() }
     }
+    BackHandler(enabled = s.onboardingStep != null && s.onboardingStep!! > 0) { vm.backStep() }
     BackHandler(enabled = s.results != null && s.viewer == null) { vm.clearResults() }
     BackHandler(enabled = s.viewer != null) { vm.closeViewer() }
 
@@ -201,15 +214,16 @@ fun RecallScreen(vm: MainViewModel) {
             snackbarHost = { SnackbarHost(snackbar) },
             containerColor = MaterialTheme.colorScheme.background,
         ) { pad ->
-            if (!s.hasPermission) {
-                Onboarding(Modifier.padding(pad), ::askPermission)
-                return@Scaffold
-            }
-            Column(Modifier.fillMaxSize().padding(top = pad.calculateTopPadding())) {
-                SearchHeader(s, vm, onSettings = { showSettings = true })
-                ChipRows(s, vm)
-                StatusStrip(s, vm, ::askPermission)
-                PhotoGrid(s, vm, Modifier.weight(1f))
+            when {
+                s.onboardingStep != null -> Onboarding(s, vm, Modifier.padding(pad), ::askPermission)
+                !s.hasPermission -> NeedPermission(Modifier.padding(pad), ::askPermission)
+                else -> Column(Modifier.fillMaxSize().padding(top = pad.calculateTopPadding())) {
+                    SearchHeader(s, vm, onSettings = { showSettings = true })
+                    FilterRow(s, vm, onOpenFilters = { showFilters = true })
+                    IdleChips(s, vm)
+                    StatusStrip(s, vm, ::askPermission)
+                    PhotoGrid(s, vm, Modifier.weight(1f))
+                }
             }
         }
         s.viewer?.let { Viewer(it, s, vm) }
@@ -217,37 +231,29 @@ fun RecallScreen(vm: MainViewModel) {
 
     if (showSettings) {
         val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-        ModalBottomSheet(
-            onDismissRequest = { showSettings = false; vm.applyScope() },
-            sheetState = sheet,
-        ) { SettingsSheet(s, vm) }
+        ModalBottomSheet(onDismissRequest = { showSettings = false; vm.applyScope() }, sheetState = sheet) { SettingsSheet(s, vm) }
+    }
+    if (showFilters) {
+        val sheet = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        ModalBottomSheet(onDismissRequest = { showFilters = false }, sheetState = sheet) { FiltersSheet(s, vm) }
     }
 }
 
 @Composable
-private fun Onboarding(modifier: Modifier, onAllow: () -> Unit) {
-    Column(
-        modifier.fillMaxSize().padding(horizontal = 28.dp),
-        verticalArrangement = Arrangement.Center,
-    ) {
-        Text("Recall", fontSize = 44.sp, fontWeight = FontWeight.Black, color = MaterialTheme.colorScheme.primary)
+private fun NeedPermission(modifier: Modifier, onAllow: () -> Unit) {
+    Column(modifier.fillMaxSize().padding(horizontal = 28.dp), verticalArrangement = Arrangement.Center) {
+        Text("Recall needs your photos", fontSize = 28.sp, fontWeight = FontWeight.Black)
         Spacer(Modifier.height(12.dp))
         Text(
-            "Find any photo by describing it: “receipt from Croma”, “dog on the beach”, “whiteboard notes”.",
-            style = MaterialTheme.typography.titleMedium,
+            "Photo access was turned off. Recall only looks at your photos on this phone and never uploads them.",
+            style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Spacer(Modifier.height(12.dp))
-        Text(
-            "Everything runs on this phone. Your photos are never uploaded anywhere. The only download is the search model (about 285 MB, once).",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(Modifier.height(28.dp))
+        Spacer(Modifier.height(24.dp))
         Button(onClick = onAllow, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text("Allow photo access") }
     }
 }
 
-// ---------------------------------------------------------------------------- header + chips
+// ---------------------------------------------------------------------------- header, filters, chips
 
 @Composable
 private fun SearchHeader(s: UiState, vm: MainViewModel, onSettings: () -> Unit) {
@@ -262,7 +268,7 @@ private fun SearchHeader(s: UiState, vm: MainViewModel, onSettings: () -> Unit) 
             modifier = Modifier.weight(1f),
             singleLine = true,
             shape = RoundedCornerShape(28.dp),
-            placeholder = { Text("Describe a photo…") },
+            placeholder = { Text("Describe a photo, e.g. “beach 2023”") },
             leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null) },
             trailingIcon = {
                 if (s.query.isNotEmpty() || s.results != null) {
@@ -283,34 +289,66 @@ private fun SearchHeader(s: UiState, vm: MainViewModel, onSettings: () -> Unit) 
     }
 }
 
+/** "Filters" plus one removable chip per active filter; quick folder chips when nothing is filtered. */
 @Composable
-private fun ChipRows(s: UiState, vm: MainViewModel) {
-    val focus = LocalFocusManager.current
-    if (s.results == null && s.query.isEmpty() && s.modelReady && s.indexedCount > 0) {
-        LazyRow(
-            contentPadding = PaddingValues(horizontal = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            items(suggestions) { text ->
-                SuggestionChip(onClick = { focus.clearFocus(); vm.search(text) }, label = { Text(text) })
+private fun FilterRow(s: UiState, vm: MainViewModel, onOpenFilters: () -> Unit) {
+    val f = s.filters
+    val folderName = f.folder?.let { id -> s.folders.firstOrNull { it.id == id }?.name }
+    LazyRow(
+        contentPadding = PaddingValues(horizontal = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.padding(vertical = 2.dp),
+    ) {
+        item {
+            FilterChip(
+                selected = f.activeCount > 0,
+                onClick = onOpenFilters,
+                label = { Text(if (f.activeCount > 0) "Filters · ${f.activeCount}" else "Filters") },
+                leadingIcon = { Icon(Icons.Filled.DateRange, contentDescription = null, modifier = Modifier.size(18.dp)) },
+            )
+        }
+        if (f.dateLabel != null) item { RemovableChip(f.dateLabel) { vm.clearDate() } }
+        if (folderName != null) item { RemovableChip(folderName) { vm.setFilters(f.copy(folder = null)) } }
+        if (f.kind != Kind.ANY) item { RemovableChip(f.kind.label) { vm.setFilters(f.copy(kind = Kind.ANY)) } }
+        if (f.favoritesOnly) item { RemovableChip("Favourites") { vm.setFilters(f.copy(favoritesOnly = false)) } }
+        if (f.shape != Shape.ANY) item { RemovableChip(f.shape.label) { vm.setFilters(f.copy(shape = Shape.ANY)) } }
+        if (f.activeCount == 0) {
+            items(s.folders.take(6), key = { it.id }) { folder ->
+                FilterChip(selected = false, onClick = { vm.setFilters(f.copy(folder = folder.id)) }, label = { Text(folder.name) })
             }
         }
     }
-    if (s.folders.size > 1) {
-        LazyRow(
-            contentPadding = PaddingValues(horizontal = 16.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            item {
-                FilterChip(selected = s.folderFilter == null, onClick = { vm.setFolderFilter(null) }, label = { Text("All photos") })
-            }
-            items(s.folders, key = { it.id }) { f ->
-                FilterChip(
-                    selected = s.folderFilter == f.id,
-                    onClick = { vm.setFolderFilter(if (s.folderFilter == f.id) null else f.id) },
-                    label = { Text("${f.name} · ${nf.format(f.count)}") },
-                )
-            }
+}
+
+@Composable
+private fun RemovableChip(label: String, onRemove: () -> Unit) {
+    InputChip(
+        selected = true,
+        onClick = onRemove,
+        label = { Text(label) },
+        trailingIcon = { Icon(Icons.Filled.Close, contentDescription = "Remove $label", modifier = Modifier.size(16.dp)) },
+    )
+}
+
+/** Recent searches and suggestions, shown while nothing is being searched. */
+@Composable
+private fun IdleChips(s: UiState, vm: MainViewModel) {
+    if (s.results != null || s.query.isNotEmpty() || !s.modelReady || s.indexedCount == 0) return
+    val focus = LocalFocusManager.current
+    LazyRow(
+        contentPadding = PaddingValues(horizontal = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.padding(vertical = 2.dp),
+    ) {
+        items(s.recent, key = { "r:$it" }) { q ->
+            AssistChip(
+                onClick = { focus.clearFocus(); vm.search(q) },
+                label = { Text(q, maxLines = 1) },
+                leadingIcon = { Icon(Icons.Filled.Refresh, contentDescription = null, modifier = Modifier.size(16.dp)) },
+            )
+        }
+        items(suggestions.filterNot { sug -> s.recent.any { it.equals(sug, ignoreCase = true) } }, key = { "s:$it" }) { text ->
+            SuggestionChip(onClick = { focus.clearFocus(); vm.search(text) }, label = { Text(text) })
         }
     }
 }
@@ -320,12 +358,13 @@ private fun ChipRows(s: UiState, vm: MainViewModel) {
 @Composable
 private fun StatusStrip(s: UiState, vm: MainViewModel, askPermission: () -> Unit) {
     val modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp)
+    val pending = s.selectedCount - s.selectedIndexed
     when {
         !s.modelReady && s.downloading -> StatusCard(modifier) {
             val pct = if (s.downloadTotal > 0) s.downloadDone.toFloat() / s.downloadTotal else 0f
-            Text("Downloading search model", fontWeight = FontWeight.Bold)
+            Text("Downloading the search engine", fontWeight = FontWeight.Bold)
             Text(
-                if (s.downloadTotal > 0) "${s.downloadDone / 1_000_000} of ${s.downloadTotal / 1_000_000} MB" else "Starting…",
+                if (s.downloadTotal > 0) "${s.downloadDone / 1_000_000} of ${s.downloadTotal / 1_000_000} MB · you can leave the app" else "Starting…",
                 color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall,
             )
             Spacer(Modifier.height(8.dp))
@@ -335,24 +374,22 @@ private fun StatusStrip(s: UiState, vm: MainViewModel, askPermission: () -> Unit
         !s.modelReady -> StatusCard(modifier) {
             Text("Turn on search", fontWeight = FontWeight.Bold)
             Text(
-                if (s.downloadFailed) "The download stopped. Check your connection and try again."
-                else "Downloads the search model once (about 285 MB). Wi-Fi recommended.",
+                if (s.downloadFailed) "The download stopped. Check your internet connection and try again."
+                else "Download Recall's search engine once (about 285 MB). It's the only thing Recall ever downloads.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall,
             )
             Spacer(Modifier.height(10.dp))
-            Button(onClick = vm::downloadModel) { Text(if (s.downloadFailed) "Retry download" else "Download model") }
+            Button(onClick = vm::downloadModel) { Text(if (s.downloadFailed) "Try again" else "Download") }
         }
         s.indexing -> StatusCard(modifier) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
+                    Text("Getting your photos ready to search", fontWeight = FontWeight.Bold)
                     Text(
-                        if (s.indexTotal > 0) "Indexing ${nf.format(s.indexDone)} of ${nf.format(s.indexTotal)}" else "Indexing photos",
-                        fontWeight = FontWeight.Bold,
-                    )
-                    Text(
-                        when {
-                            s.msPerPhoto <= 0 -> "Measuring speed…"
-                            else -> "%.1f s per photo · %s left".format(s.msPerPhoto / 1000.0, formatEta(s.etaSec))
+                        buildString {
+                            if (s.indexTotal > 0) append("${nf.format(s.indexDone)} of ${nf.format(s.indexTotal)}")
+                            if (s.msPerPhoto > 0) append(" · ${friendlyDuration(s.etaSec)} left")
+                            else append(" · working out how long…")
                         },
                         color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall,
                     )
@@ -364,24 +401,30 @@ private fun StatusStrip(s: UiState, vm: MainViewModel, askPermission: () -> Unit
             else LinearProgressIndicator(Modifier.fillMaxWidth())
             Spacer(Modifier.height(6.dp))
             Text(
-                "Search already works on indexed photos. Keep the phone charging for the fastest progress.",
+                "Search already works on the photos that are ready." +
+                    if (s.msPerPhoto > 0) " (%.1f seconds per photo)".format(s.msPerPhoto / 1000.0) else "",
                 color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall,
             )
         }
-        else -> Row(modifier, verticalAlignment = Alignment.CenterVertically) {
-            val pending = s.selectedCount - s.selectedIndexed
+        pending > 0 && s.chargingOnly -> Row(modifier, verticalAlignment = Alignment.CenterVertically) {
             Text(
-                if (pending > 0) "${nf.format(s.selectedIndexed)} of ${nf.format(s.selectedCount)} selected photos searchable"
-                else "${nf.format(s.indexedCount)} photos searchable",
+                "${nf.format(pending)} photos will be prepared when you plug in your charger.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f),
+            )
+        }
+        else -> Row(modifier, verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                if (pending > 0) "${nf.format(s.selectedIndexed)} of ${nf.format(s.selectedCount)} photos ready to search"
+                else "All ${nf.format(s.selectedIndexed)} selected photos are ready to search",
                 color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.weight(1f),
             )
-            if (pending > 0) TextButton(onClick = vm::startIndexing) { Text("Index now") }
+            if (pending > 0) TextButton(onClick = vm::startIndexing) { Text("Continue") }
         }
     }
     if (!s.fullAccess) {
         Row(modifier, verticalAlignment = Alignment.CenterVertically) {
-            Text("Recall can only see the photos you selected.", style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+            Text("Recall can only see the photos you picked.", style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
             TextButton(onClick = askPermission) { Text("Allow all") }
         }
     }
@@ -398,7 +441,7 @@ private fun StatusCard(modifier: Modifier, content: @Composable () -> Unit) {
 
 private sealed interface GridEntry
 private data class Header(val key: String, val title: String, val count: Int) : GridEntry
-private data class Cell(val photo: Photo, val index: Int, val score: Float?) : GridEntry
+private data class Cell(val photo: Photo, val index: Int) : GridEntry
 
 /** Splits photos (already newest first) into month sections. */
 private fun sections(photos: List<Photo>): List<GridEntry> {
@@ -415,7 +458,7 @@ private fun sections(photos: List<Photo>): List<GridEntry> {
             headerAt = out.size
             out.add(Header("h$i", month, 0))
         }
-        out.add(Cell(p, i, null))
+        out.add(Cell(p, i))
         count++
     }
     if (headerAt >= 0) out[headerAt] = (out[headerAt] as Header).copy(count = count)
@@ -426,10 +469,15 @@ private fun sections(photos: List<Photo>): List<GridEntry> {
 private fun PhotoGrid(s: UiState, vm: MainViewModel, modifier: Modifier) {
     val results = s.results
     val visible = s.visiblePhotos
-    val entries: List<GridEntry> = remember(results, visible) {
-        results?.mapIndexed { i, h -> Cell(h.photo, i, h.score) } ?: sections(visible)
+    val shown: List<Photo>? = remember(results, s.shownCount) { results?.take(s.shownCount)?.map { it.photo } }
+    val entries: List<GridEntry> = remember(shown, visible, s.resultsByDate) {
+        when {
+            shown == null -> sections(visible)
+            s.resultsByDate -> sections(shown)
+            else -> shown.mapIndexed { i, p -> Cell(p, i) }
+        }
     }
-    val viewList: List<Photo> = remember(results, visible) { results?.map { it.photo } ?: visible }
+    val viewList: List<Photo> = shown ?: visible
 
     LazyVerticalGrid(
         columns = GridCells.Adaptive(100.dp),
@@ -443,13 +491,18 @@ private fun PhotoGrid(s: UiState, vm: MainViewModel, modifier: Modifier) {
         }
         if (results != null) {
             item(span = { GridItemSpan(maxLineSpan) }) {
-                Row(Modifier.padding(horizontal = 14.dp, vertical = 8.dp), verticalAlignment = Alignment.Bottom) {
+                Column(Modifier.padding(horizontal = 14.dp, vertical = 8.dp)) {
                     Text(
-                        s.resultsTitle, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
+                        if (s.resultsByDate) s.resultsTitle else "Best matches for ${s.resultsTitle}",
+                        style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold,
+                        maxLines = 2, overflow = TextOverflow.Ellipsis,
                     )
                     Text(
-                        "best ${results.size} · ${s.searchMillis} ms",
+                        when {
+                            results.isEmpty() -> ""
+                            s.resultsByDate -> "${nf.format(results.size)} photos"
+                            else -> "Showing the ${s.shownCount} closest" + if (s.searchMillis > 0) " · found in ${s.searchMillis} ms" else ""
+                        },
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
@@ -457,8 +510,11 @@ private fun PhotoGrid(s: UiState, vm: MainViewModel, modifier: Modifier) {
             if (results.isEmpty()) {
                 item(span = { GridItemSpan(maxLineSpan) }) {
                     Text(
-                        if (s.indexedCount == 0) "No photos are indexed yet. Indexing runs in the background; try again in a bit."
-                        else "No matches in this folder.",
+                        when {
+                            s.indexedCount == 0 -> "No photos are ready yet. Recall is still preparing them; try again in a little while."
+                            s.filters.activeCount > 0 -> "Nothing matches with these filters. Try removing one."
+                            else -> "No matches."
+                        },
                         modifier = Modifier.padding(16.dp), color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
@@ -475,24 +531,160 @@ private fun PhotoGrid(s: UiState, vm: MainViewModel, modifier: Modifier) {
                     Text(e.title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
                     Text(nf.format(e.count), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                is Cell -> Thumb(e.photo, e.score) { vm.openViewer(viewList, e.index) }
+                is Cell -> Thumb(e.photo, best = results != null && !s.resultsByDate && e.index == 0) { vm.openViewer(viewList, e.index) }
+            }
+        }
+        if (results != null && s.shownCount < results.size) {
+            item(span = { GridItemSpan(maxLineSpan) }) {
+                OutlinedButton(onClick = vm::showMore, modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+                    Text(if (s.resultsByDate) "Show more photos" else "Show more results")
+                }
             }
         }
     }
 }
 
 @Composable
-private fun Thumb(photo: Photo, score: Float?, onClick: () -> Unit) {
+private fun Thumb(photo: Photo, best: Boolean, onClick: () -> Unit) {
     Box(Modifier.aspectRatio(1f).background(MaterialTheme.colorScheme.surfaceVariant).clickable(onClick = onClick)) {
         AsyncImage(model = photo.uri, contentDescription = photo.name, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
-        if (score != null) {
+        if (best) {
             Text(
-                "%.2f".format(score),
-                fontSize = 10.sp,
-                color = Color.White,
-                modifier = Modifier.align(Alignment.BottomEnd).padding(4.dp)
-                    .background(Color(0x99000000), RoundedCornerShape(4.dp)).padding(horizontal = 4.dp, vertical = 1.dp),
+                "Best match",
+                fontSize = 10.sp, fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onPrimary,
+                modifier = Modifier.align(Alignment.BottomStart).padding(4.dp)
+                    .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(4.dp)).padding(horizontal = 5.dp, vertical = 1.dp),
             )
+        }
+        if (photo.favorite) {
+            Icon(
+                Icons.Filled.Favorite, contentDescription = "Favourite", tint = Color.White,
+                modifier = Modifier.align(Alignment.TopEnd).padding(4.dp).size(14.dp),
+            )
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------- filters panel
+
+@OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@Composable
+private fun FiltersSheet(s: UiState, vm: MainViewModel) {
+    val f = s.filters
+    LazyColumn(Modifier.fillMaxWidth(), contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = 32.dp)) {
+        item {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Filters", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+                if (f.activeCount > 0) TextButton(onClick = vm::clearFilters) { Text("Clear all") }
+            }
+            Text(
+                "Filters apply to your gallery and to search results.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(20.dp))
+
+            // When
+            Text("When", fontWeight = FontWeight.Bold)
+            if (s.maxYear > s.minYear) {
+                val fromYear = f.from?.year?.coerceIn(s.minYear, s.maxYear) ?: s.minYear
+                val toYear = f.until?.minusDays(1)?.year?.coerceIn(s.minYear, s.maxYear) ?: s.maxYear
+                var range by remember(fromYear, toYear) { mutableStateOf(fromYear.toFloat()..toYear.toFloat()) }
+                val a = range.start.roundToInt(); val b = range.endInclusive.roundToInt()
+                Text(
+                    if (a <= s.minYear && b >= s.maxYear) "Any time" else if (a == b) "$a" else "$a – $b",
+                    style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.primary,
+                )
+                RangeSlider(
+                    value = range,
+                    onValueChange = { range = it },
+                    valueRange = s.minYear.toFloat()..s.maxYear.toFloat(),
+                    steps = (s.maxYear - s.minYear - 1).coerceAtLeast(0),
+                    onValueChangeFinished = { vm.setYears(range.start.roundToInt(), range.endInclusive.roundToInt()) },
+                )
+                Row {
+                    Text("${s.minYear}", style = MaterialTheme.typography.labelSmall, modifier = Modifier.weight(1f))
+                    Text("${s.maxYear}", style = MaterialTheme.typography.labelSmall)
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            val today = LocalDate.now()
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(selected = f.from == null, onClick = { vm.setFilters(f.clearDate()) }, label = { Text("Any time") })
+                FilterChip(
+                    selected = f.dateLabel == "Last 30 days",
+                    onClick = { vm.setFilters(f.copy(from = today.minusDays(30), until = today.plusDays(1), dateLabel = "Last 30 days", dateFromQuery = false)) },
+                    label = { Text("Last 30 days") },
+                )
+                FilterChip(
+                    selected = f.dateLabel == "${today.year}",
+                    onClick = { vm.setYears(today.year, today.year) },
+                    label = { Text("This year") },
+                )
+                FilterChip(
+                    selected = f.dateLabel == "${today.year - 1}",
+                    onClick = { vm.setYears(today.year - 1, today.year - 1) },
+                    label = { Text("Last year") },
+                )
+            }
+            Spacer(Modifier.height(20.dp))
+
+            // Kind
+            Text("Type", fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(8.dp))
+            val kinds = Kind.entries
+            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                kinds.forEachIndexed { i, k ->
+                    SegmentedButton(
+                        selected = f.kind == k, onClick = { vm.setFilters(f.copy(kind = k)) },
+                        shape = SegmentedButtonDefaults.itemShape(i, kinds.size),
+                    ) { Text(k.label, maxLines = 1) }
+                }
+            }
+            Spacer(Modifier.height(20.dp))
+
+            // Shape
+            Text("Shape", fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(8.dp))
+            val shapes = Shape.entries
+            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
+                shapes.forEachIndexed { i, sh ->
+                    SegmentedButton(
+                        selected = f.shape == sh, onClick = { vm.setFilters(f.copy(shape = sh)) },
+                        shape = SegmentedButtonDefaults.itemShape(i, shapes.size),
+                    ) { Text(if (sh == Shape.ANY) "Any" else sh.label, maxLines = 1) }
+                }
+            }
+            Spacer(Modifier.height(16.dp))
+
+            // Favourites
+            if (Build.VERSION.SDK_INT >= 30) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Favourites only", fontWeight = FontWeight.Bold)
+                        Text(
+                            "Photos you starred or hearted in your gallery app.",
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    Switch(checked = f.favoritesOnly, onCheckedChange = { vm.setFilters(f.copy(favoritesOnly = it)) })
+                }
+                Spacer(Modifier.height(16.dp))
+            }
+
+            // Folder
+            Text("Folder", fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(8.dp))
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(selected = f.folder == null, onClick = { vm.setFilters(f.copy(folder = null)) }, label = { Text("All folders") })
+                s.folders.forEach { folder ->
+                    FilterChip(
+                        selected = f.folder == folder.id,
+                        onClick = { vm.setFilters(f.copy(folder = if (f.folder == folder.id) null else folder.id)) },
+                        label = { Text("${folder.name} · ${nf.format(folder.count)}") },
+                    )
+                }
+            }
         }
     }
 }
@@ -512,7 +704,6 @@ private fun Viewer(v: ViewerState, s: UiState, vm: MainViewModel) {
         }
 
         if (chrome) {
-            // Top bar: date + folder, close. Padded below the status bar.
             Row(
                 Modifier.align(Alignment.TopCenter).fillMaxWidth()
                     .background(Brush.verticalGradient(listOf(Color(0xCC000000), Color.Transparent)))
@@ -538,7 +729,6 @@ private fun Viewer(v: ViewerState, s: UiState, vm: MainViewModel) {
                 }
             }
 
-            // Bottom actions, padded above the navigation bar so they are always reachable.
             Row(
                 Modifier.align(Alignment.BottomCenter).fillMaxWidth()
                     .background(Brush.verticalGradient(listOf(Color.Transparent, Color(0xCC000000))))
@@ -547,7 +737,7 @@ private fun Viewer(v: ViewerState, s: UiState, vm: MainViewModel) {
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 Button(onClick = { vm.findSimilar(photo) }, enabled = s.modelReady, modifier = Modifier.weight(1f)) {
-                    Text("Find similar")
+                    Text("Find similar photos")
                 }
                 FilledTonalButton(onClick = {
                     val send = Intent(Intent.ACTION_SEND).apply {
@@ -615,54 +805,42 @@ private fun ZoomableImage(photo: Photo, onTap: () -> Unit) {
 @Composable
 private fun SettingsSheet(s: UiState, vm: MainViewModel) {
     val allFolders = s.scopeFolders == null
-    LazyColumn(
-        Modifier.fillMaxWidth(),
-        contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = 32.dp),
-    ) {
+    var confirmDelete by remember { mutableStateOf(false) }
+    LazyColumn(Modifier.fillMaxWidth(), contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = 32.dp)) {
         item {
-            Text("What to index", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Text("Which photos to prepare", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(4.dp))
             Text(
-                "${nf.format(s.selectedCount)} photos selected · ${nf.format(s.selectedIndexed)} indexed",
+                "${nf.format(s.selectedCount)} photos selected · ${nf.format(s.selectedIndexed)} ready to search",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(Modifier.height(20.dp))
-            Text("Time range", fontWeight = FontWeight.Bold)
+            Text("How far back", fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(8.dp))
-            val ranges = DateRange.entries
+            val ranges = listOf(DateRange.ALL, DateRange.Y5, DateRange.Y3, DateRange.Y1)
             SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
                 ranges.forEachIndexed { i, r ->
                     SegmentedButton(
-                        selected = s.dateRange == r,
-                        onClick = { vm.setDateRange(r) },
+                        selected = s.dateRange == r, onClick = { vm.setDateRange(r) },
                         shape = SegmentedButtonDefaults.itemShape(i, ranges.size),
-                    ) { Text(r.label, maxLines = 1) }
+                    ) { Text(if (r == DateRange.ALL) "All" else r.label, maxLines = 1) }
                 }
             }
             Spacer(Modifier.height(16.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text("Oldest photos first", fontWeight = FontWeight.Bold)
-                    Text(
-                        "Off: your newest photos become searchable first.",
-                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                Switch(checked = s.oldestFirst, onCheckedChange = vm::setOldestFirst)
-            }
-            Spacer(Modifier.height(20.dp))
-            Text("Photo detail", fontWeight = FontWeight.Bold)
+            SettingSwitch("Oldest photos first", "Off: your newest photos are ready first.", s.oldestFirst, vm::setOldestFirst)
+            SettingSwitch("Only while charging", "Saves battery. Preparing takes longer overall.", s.chargingOnly, vm::setChargingOnly)
+            Spacer(Modifier.height(8.dp))
+            Text("Detail", fontWeight = FontWeight.Bold)
             Text(
-                "Detailed finds small things like text and background objects, but takes about 4× longer per photo than Fast.",
+                "Thorough notices small things like text and background objects, but takes about 4× longer per photo than Quick.",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(Modifier.height(8.dp))
-            val options = listOf(70 to "Fast", 140 to "Balanced", 280 to "Detailed")
+            val options = listOf(70 to "Quick", 140 to "Balanced", 280 to "Thorough")
             SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
                 options.forEachIndexed { i, (value, label) ->
                     SegmentedButton(
-                        selected = s.photoDetail == value,
-                        onClick = { vm.setPhotoDetail(value) },
+                        selected = s.photoDetail == value, onClick = { vm.setPhotoDetail(value) },
                         shape = SegmentedButtonDefaults.itemShape(i, options.size),
                     ) { Text(label) }
                 }
@@ -685,43 +863,60 @@ private fun SettingsSheet(s: UiState, vm: MainViewModel) {
             Spacer(Modifier.height(4.dp))
         }
         items(s.folders, key = { it.id }) { f ->
-            val checked = allFolders || s.scopeFolders?.contains(f.id) == true
-            Row(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
-                    .clickable { vm.toggleFolder(f.id) }.padding(vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                AsyncImage(
-                    model = f.cover, contentDescription = null, contentScale = ContentScale.Crop,
-                    modifier = Modifier.size(44.dp).clip(RoundedCornerShape(8.dp)).background(MaterialTheme.colorScheme.surfaceVariant),
-                )
-                Spacer(Modifier.width(12.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(f.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(
-                        "${nf.format(f.count)} photos",
-                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                Checkbox(checked = checked, onCheckedChange = { vm.toggleFolder(f.id) })
-            }
+            FolderRow(f, allFolders || s.scopeFolders?.contains(f.id) == true) { vm.toggleFolder(f.id) }
         }
         item {
-            Spacer(Modifier.height(16.dp))
-            HorizontalDivider()
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(12.dp))
             Text(
-                "Changes apply when you close this panel. Photos you deselect stay searchable until you re-index.",
+                "Changes apply when you close this panel. Photos you remove stay searchable until you start over.",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Spacer(Modifier.height(12.dp))
-            FilledTonalButton(onClick = vm::reindexAll, enabled = s.modelReady) { Text("Re-index everything") }
+            FilledTonalButton(onClick = vm::reindexAll, enabled = s.modelReady) { Text("Start over and prepare again") }
+            Spacer(Modifier.height(24.dp))
+            HorizontalDivider()
+            Spacer(Modifier.height(16.dp))
+            Text("Privacy & permissions", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(8.dp))
+            PrivacyPromises()
+            Spacer(Modifier.height(8.dp))
+            PermissionList()
+            Spacer(Modifier.height(16.dp))
+            if (!confirmDelete) {
+                OutlinedButton(onClick = { confirmDelete = true }, enabled = s.modelReady || s.indexedCount > 0) {
+                    Text("Remove search engine and index")
+                }
+            } else {
+                Surface(shape = RoundedCornerShape(12.dp), color = MaterialTheme.colorScheme.errorContainer) {
+                    Column(Modifier.padding(12.dp)) {
+                        Text(
+                            "This frees about 300 MB. Your photos stay exactly as they are. You can download the engine again later.",
+                            color = MaterialTheme.colorScheme.onErrorContainer, style = MaterialTheme.typography.bodyMedium,
+                        )
+                        Row {
+                            TextButton(onClick = { confirmDelete = false }) { Text("Keep") }
+                            TextButton(onClick = { confirmDelete = false; vm.deleteEverything() }) { Text("Remove") }
+                        }
+                    }
+                }
+            }
             Spacer(Modifier.height(16.dp))
             Text(
-                "Model: EmbeddingGemma 2 (4-bit) on this phone, using ${RecallApp.performanceCores()} fast CPU cores. " +
-                    "${nf.format(s.indexedCount)} photos indexed in total.",
+                "Search engine: EmbeddingGemma 2 by Google, running on this phone with ${RecallApp.performanceCores()} fast CPU cores. " +
+                    "${nf.format(s.indexedCount)} photos ready in total.",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+    }
+}
+
+@Composable
+private fun SettingSwitch(title: String, body: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(title, fontWeight = FontWeight.Bold)
+            Text(body, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Switch(checked = checked, onCheckedChange = onChange)
     }
 }

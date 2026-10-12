@@ -85,4 +85,22 @@ class Settings(context: Context) {
     var oldestFirst: Boolean
         get() = prefs.getBoolean("oldest_first", false)
         set(value) = prefs.edit().putBoolean("oldest_first", value).apply()
+
+    var onboardingDone: Boolean
+        get() = prefs.getBoolean("onboarding_done", false)
+        set(value) = prefs.edit().putBoolean("onboarding_done", value).apply()
+
+    /** Only index while the phone is charging (saves battery; slower to finish). */
+    var chargingOnly: Boolean
+        get() = prefs.getBoolean("charging_only", false)
+        set(value) = prefs.edit().putBoolean("charging_only", value).apply()
+
+    /** Most recent first, at most 8. */
+    var recentSearches: List<String>
+        get() = prefs.getString("recent", "")!!.split('\n').filter { it.isNotBlank() }
+        set(value) = prefs.edit().putString("recent", value.take(8).joinToString("\n")).apply()
+
+    fun addRecent(q: String) {
+        recentSearches = listOf(q) + recentSearches.filterNot { it.equals(q, ignoreCase = true) }
+    }
 }

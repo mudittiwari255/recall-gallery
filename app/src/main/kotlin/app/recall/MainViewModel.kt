@@ -9,6 +9,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
+import app.recall.core.DateQuery
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -17,6 +18,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.time.Instant
+import java.time.ZoneId
 
 data class Hit(val photo: Photo, val score: Float)
 
@@ -24,11 +27,16 @@ data class Hit(val photo: Photo, val score: Float)
 data class ViewerState(val photos: List<Photo>, val start: Int)
 
 data class UiState(
+    // welcome flow: 0 welcome, 1 privacy, 2 permissions, 3 folders, 4 download; null when finished
+    val onboardingStep: Int? = 0,
+    val permissionDenied: Boolean = false,
     val hasPermission: Boolean = false,
     val fullAccess: Boolean = true,
     val photos: List<Photo> = emptyList(),
     val folders: List<Folder> = emptyList(),
-    val folderFilter: String? = null,
+    val minYear: Int = 2000,
+    val maxYear: Int = 2026,
+    val filters: Filters = Filters(),
     val modelReady: Boolean = false,
     val downloading: Boolean = false,
     val downloadDone: Long = 0,
@@ -45,36 +53,47 @@ data class UiState(
     val query: String = "",
     val searching: Boolean = false,
     val results: List<Hit>? = null,
+    val shownCount: Int = 0,
     val resultsTitle: String = "",
+    val resultsByDate: Boolean = false,
     val searchMillis: Long = 0,
+    val recent: List<String> = emptyList(),
     val message: String? = null,
     val viewer: ViewerState? = null,
     val photoDetail: Int = 70,
     val scopeFolders: Set<String>? = null,
     val dateRange: DateRange = DateRange.ALL,
     val oldestFirst: Boolean = false,
+    val chargingOnly: Boolean = false,
     val scopeDirty: Boolean = false,
 ) {
-    /** Gallery photos after the folder chip filter. */
+    /** Gallery photos after filters. */
     val visiblePhotos: List<Photo>
-        get() = folderFilter?.let { f -> photos.filter { it.bucketId == f } } ?: photos
+        get() = if (filters.activeCount == 0) photos else filters.matcher().let { m -> photos.filter(m) }
 }
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val app = application as RecallApp
     private val work = WorkManager.getInstance(app)
+    private val settings = app.settings
     private val _state = MutableStateFlow(
         UiState(
-            photoDetail = app.settings.photoDetail,
-            scopeFolders = app.settings.folders,
-            dateRange = app.settings.dateRange,
-            oldestFirst = app.settings.oldestFirst,
+            onboardingStep = if (settings.onboardingDone || (app.models.isReady && app.hasPhotoPermission())) null else 0,
+            photoDetail = settings.photoDetail,
+            scopeFolders = settings.folders,
+            dateRange = settings.dateRange,
+            oldestFirst = settings.oldestFirst,
+            chargingOnly = settings.chargingOnly,
+            recent = settings.recentSearches,
         ),
     )
     val state: StateFlow<UiState> = _state
 
     private var searchJob: Job? = null
     private var lastQueryVec: FloatArray? = null
+    private var lastExclude: Long? = null
+    private var lastRaw: String? = null
+    private var lastCountRefresh = 0L
     private val observer = object : ContentObserver(Handler(Looper.getMainLooper())) {
         private var pending: Job? = null
         override fun onChange(selfChange: Boolean) {
@@ -84,6 +103,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     init {
+        if (_state.value.onboardingStep == null) settings.onboardingDone = true
         app.contentResolver.registerContentObserver(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, true, observer)
         viewModelScope.launch {
             work.getWorkInfosForUniqueWorkFlow(Work.DOWNLOAD).collect { infos ->
@@ -110,8 +130,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private var lastCountRefresh = 0L
-
     private fun onIndexInfo(info: WorkInfo?) {
         val running = info?.state == WorkInfo.State.RUNNING
         val p = info?.progress
@@ -124,7 +142,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 etaSec = p?.getLong("etaSec", it.etaSec) ?: it.etaSec,
             )
         }
-        // Counting rows is cheap but not free; refresh at most every few seconds while indexing
         val now = System.currentTimeMillis()
         if (!running || now - lastCountRefresh > 4000) {
             lastCountRefresh = now
@@ -144,12 +161,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (!app.hasPhotoPermission()) return
         val photos = withContext(Dispatchers.IO) { app.media.loadAll() }
         val folders = withContext(Dispatchers.Default) { foldersOf(photos) }
+        val zone = ZoneId.systemDefault()
+        val years = photos.asSequence().map { Instant.ofEpochMilli(it.dateTaken).atZone(zone).year }.filter { it in 1990..2100 }
+        val minYear = years.minOrNull() ?: 2020
+        val maxYear = maxOf(years.maxOrNull() ?: minYear, minYear)
         _state.update { s ->
-            s.copy(photos = photos, folders = folders, folderFilter = s.folderFilter?.takeIf { f -> folders.any { it.id == f } })
+            s.copy(
+                photos = photos, folders = folders, minYear = minYear, maxYear = maxYear,
+                filters = s.filters.copy(folder = s.filters.folder?.takeIf { f -> folders.any { it.id == f } }),
+            )
         }
         refreshCounts()
-        if (app.models.isReady && !_state.value.indexing) {
-            // Start indexing when selected photos are new (KEEP makes this a no-op while a run is active)
+        if (app.models.isReady && !_state.value.indexing && _state.value.onboardingStep == null) {
             val processed = withContext(Dispatchers.IO) { app.db.processed() }
             if (app.indexSelection(photos).any { processed[it.id] != it.modified }) Work.startIndexing(app)
         }
@@ -165,7 +188,29 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _state.update { it.copy(indexedCount = indexed, selectedCount = selected, selectedIndexed = selectedIndexed) }
     }
 
-    fun onPermissionResult() = refresh()
+    // ------------------------------------------------------------------ welcome flow
+
+    fun nextStep() = _state.update { s -> s.copy(onboardingStep = s.onboardingStep?.let { it + 1 }, permissionDenied = false) }
+    fun backStep() = _state.update { s -> s.copy(onboardingStep = s.onboardingStep?.let { (it - 1).coerceAtLeast(0) }) }
+
+    fun onPermissionResult() {
+        refresh()
+        val granted = app.hasPhotoPermission()
+        _state.update { s ->
+            if (s.onboardingStep == 2) {
+                if (granted) s.copy(onboardingStep = 3, permissionDenied = false) else s.copy(permissionDenied = true)
+            } else s
+        }
+    }
+
+    fun finishOnboarding(download: Boolean) {
+        settings.onboardingDone = true
+        _state.update { it.copy(onboardingStep = null, scopeDirty = false) }
+        if (download && !app.models.isReady) downloadModel()
+        viewModelScope.launch { refreshCounts() }
+    }
+
+    // ------------------------------------------------------------------ model + indexing
 
     fun downloadModel() {
         _state.update { it.copy(downloadFailed = false, downloading = true) }
@@ -175,37 +220,44 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun startIndexing() = Work.startIndexing(app)
     fun stopIndexing() = Work.stopIndexing(app)
 
-    // ------------------------------------------------------------------ indexing scope
-
     fun setPhotoDetail(budget: Int) {
-        app.settings.photoDetail = budget
+        settings.photoDetail = budget
         _state.update { it.copy(photoDetail = budget, scopeDirty = true) }
     }
 
     fun setDateRange(r: DateRange) {
-        app.settings.dateRange = r
+        settings.dateRange = r
         _state.update { it.copy(dateRange = r, scopeDirty = true) }
+        viewModelScope.launch { refreshCounts() }
     }
 
     fun setOldestFirst(v: Boolean) {
-        app.settings.oldestFirst = v
+        settings.oldestFirst = v
         _state.update { it.copy(oldestFirst = v, scopeDirty = true) }
     }
 
+    fun setChargingOnly(v: Boolean) {
+        settings.chargingOnly = v
+        _state.update { it.copy(chargingOnly = v, scopeDirty = true) }
+    }
+
     fun setAllFolders(all: Boolean) {
-        val v: Set<String>? = if (all) null else _state.value.folders.map { it.id }.toSet()
-        app.settings.folders = v
+        val v: Set<String>? = if (all) null else emptySet()
+        settings.folders = v
         _state.update { it.copy(scopeFolders = v, scopeDirty = true) }
+        viewModelScope.launch { refreshCounts() }
     }
 
     fun toggleFolder(id: String) {
         val current = _state.value.scopeFolders ?: _state.value.folders.map { it.id }.toSet()
         val next = if (id in current) current - id else current + id
-        app.settings.folders = next
-        _state.update { it.copy(scopeFolders = next, scopeDirty = true) }
+        val v: Set<String>? = if (next.size == _state.value.folders.size) null else next
+        settings.folders = v
+        _state.update { it.copy(scopeFolders = v, scopeDirty = true) }
+        viewModelScope.launch { refreshCounts() }
     }
 
-    /** Applies scope changes when the settings sheet closes. */
+    /** Applies scope changes when the settings panel closes. */
     fun applyScope() {
         if (!_state.value.scopeDirty) return
         _state.update { it.copy(scopeDirty = false) }
@@ -215,7 +267,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** Re-embeds every photo, e.g. after changing photo detail. */
     fun reindexAll() {
         viewModelScope.launch {
             Work.stopIndexing(app)
@@ -225,37 +276,97 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // ------------------------------------------------------------------ gallery + search
-
-    fun setFolderFilter(id: String?) {
-        _state.update { it.copy(folderFilter = id) }
-        // Re-rank the current text search inside the new folder
-        lastQueryVec?.let { v -> if (_state.value.results != null) viewModelScope.launch { showRanked(v, null, _state.value.resultsTitle) } }
+    fun deleteEverything() {
+        viewModelScope.launch {
+            Work.stopIndexing(app)
+            WorkManager.getInstance(app).cancelUniqueWork(Work.INDEX_PERIODIC)
+            withContext(Dispatchers.IO) { app.db.clear(); app.models.delete() }
+            clearResults()
+            _state.update { it.copy(modelReady = false) }
+            refreshCounts()
+            toast("Removed the search engine and the index. Your photos were not touched.")
+        }
     }
+
+    // ------------------------------------------------------------------ filters
+
+    fun setFilters(f: Filters) {
+        _state.update { it.copy(filters = f) }
+        rerun()
+    }
+
+    fun setYears(fromYear: Int, toYear: Int) {
+        val s = _state.value
+        setFilters(s.filters.withYears(fromYear, toYear, s.minYear, s.maxYear))
+    }
+
+    /** Removing a date that came from the search text searches the full text again, without date parsing. */
+    fun clearDate() {
+        val f = _state.value.filters
+        _state.update { it.copy(filters = f.clearDate()) }
+        val raw = lastRaw
+        if (f.dateFromQuery && raw != null) search(raw, parseDates = false) else rerun()
+    }
+
+    fun clearFilters() {
+        _state.update { it.copy(filters = Filters()) }
+        rerun()
+    }
+
+    private fun rerun() {
+        val s = _state.value
+        if (s.results == null) return
+        val vec = lastQueryVec
+        viewModelScope.launch {
+            if (vec != null) showRanked(vec, lastExclude, s.resultsTitle) else showByDate(s.resultsTitle)
+        }
+    }
+
+    // ------------------------------------------------------------------ search
 
     fun setQuery(q: String) {
         _state.update { it.copy(query = q) }
-        if (q.isBlank()) clearResults()
+        if (q.isBlank() && _state.value.results != null) clearResults()
     }
 
     fun clearResults() {
         searchJob?.cancel()
-        lastQueryVec = null
-        _state.update { it.copy(results = null, resultsTitle = "", searching = false, query = "") }
+        lastQueryVec = null; lastExclude = null; lastRaw = null
+        _state.update { s ->
+            s.copy(
+                results = null, resultsTitle = "", searching = false, query = "",
+                filters = if (s.filters.dateFromQuery) s.filters.clearDate() else s.filters,
+            )
+        }
     }
 
-    fun search(text: String = _state.value.query) {
-        val q = text.trim()
-        if (q.isEmpty()) return
-        if (!app.models.isReady) { toast("Download the search model first."); return }
+    fun search(text: String = _state.value.query, parseDates: Boolean = true) {
+        val raw = text.trim()
+        if (raw.isEmpty()) return
+        lastRaw = raw
+        settings.addRecent(raw)
+        val parsed = if (parseDates) DateQuery.parse(raw) else DateQuery.Parsed(raw, null, null, null)
+        _state.update { s ->
+            val f = if (parsed.hasDate) {
+                s.filters.copy(from = parsed.from, until = parsed.until, dateLabel = parsed.label, dateFromQuery = true)
+            } else if (s.filters.dateFromQuery) s.filters.clearDate() else s.filters
+            s.copy(query = raw, filters = f, recent = settings.recentSearches)
+        }
         searchJob?.cancel()
+        if (parsed.text.isEmpty()) {
+            // Only a date: show everything from that time, newest first
+            lastQueryVec = null; lastExclude = null
+            searchJob = viewModelScope.launch { showByDate("Photos from ${parsed.label}") }
+            return
+        }
+        if (!app.models.isReady) { toast("Download the search engine first (see the card at the top)."); return }
         searchJob = viewModelScope.launch {
-            _state.update { it.copy(searching = true, query = q) }
+            _state.update { it.copy(searching = true) }
             try {
                 val t0 = System.currentTimeMillis()
-                val qv = withContext(Dispatchers.Default) { app.models.embedder().embedQuery(q) }
-                lastQueryVec = qv
-                showRanked(qv, null, "“$q”")
+                val qv = withContext(Dispatchers.Default) { app.models.embedder().embedQuery(parsed.text) }
+                lastQueryVec = qv; lastExclude = null
+                showRanked(qv, null, "“${parsed.text}”")
                 _state.update { it.copy(searchMillis = System.currentTimeMillis() - t0) }
             } catch (e: Exception) {
                 _state.update { it.copy(searching = false) }
@@ -268,24 +379,46 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         searchJob?.cancel()
         searchJob = viewModelScope.launch {
             val vec = withContext(Dispatchers.IO) { app.db.index().get(photo.id) }
-            if (vec == null) { toast("This photo isn't indexed yet."); return@launch }
-            lastQueryVec = vec
+            if (vec == null) { toast("This photo isn't ready for search yet. It will be soon."); return@launch }
+            lastQueryVec = vec; lastExclude = photo.id; lastRaw = null
             val t0 = System.currentTimeMillis()
-            showRanked(vec, photo.id, "Similar to this photo")
+            showRanked(vec, photo.id, "Looks like this photo")
             _state.update { it.copy(viewer = null, query = "", searchMillis = System.currentTimeMillis() - t0) }
         }
+    }
+
+    fun showMore() = _state.update { s -> s.copy(shownCount = minOf(s.shownCount + 30, s.results?.size ?: 0)) }
+
+    fun removeRecent(q: String) {
+        settings.recentSearches = settings.recentSearches.filterNot { it == q }
+        _state.update { it.copy(recent = settings.recentSearches) }
     }
 
     private suspend fun showRanked(q: FloatArray, exclude: Long?, title: String) {
         val s = _state.value
         val byId = s.photos.associateBy { it.id }
-        val folder = s.folderFilter
+        val match = s.filters.matcher()
         val hits = withContext(Dispatchers.Default) {
-            app.db.index().search(q, 300) { id ->
-                id != exclude && byId[id]?.let { folder == null || it.bucketId == folder } == true
-            }.mapNotNull { (id, score) -> byId[id]?.let { Hit(it, score) } }
+            app.db.index().search(q, 400) { id -> id != exclude && byId[id]?.let(match) == true }
+                .mapNotNull { (id, score) -> byId[id]?.let { Hit(it, score) } }
         }
-        _state.update { it.copy(results = hits, resultsTitle = title, searching = false) }
+        _state.update { it.copy(results = hits, shownCount = initialShown(hits), resultsTitle = title, resultsByDate = false, searching = false) }
+    }
+
+    private suspend fun showByDate(title: String) {
+        val hits = withContext(Dispatchers.Default) { _state.value.visiblePhotos.map { Hit(it, 0f) } }
+        _state.update { it.copy(results = hits, shownCount = minOf(hits.size, 60), resultsTitle = title, resultsByDate = true, searching = false, searchMillis = 0) }
+    }
+
+    /**
+     * How many results to show before "Show more": the clearly strong matches (within a small margin of the best one),
+     * at least 6 and at most 18, so a search shows a tidy handful instead of a wall of weak guesses.
+     */
+    private fun initialShown(hits: List<Hit>): Int {
+        if (hits.isEmpty()) return 0
+        val top = hits[0].score
+        val strong = hits.count { it.score >= top - 0.05f }
+        return strong.coerceIn(minOf(6, hits.size), minOf(18, hits.size))
     }
 
     fun warmUp() {

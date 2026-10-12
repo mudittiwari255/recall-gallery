@@ -21,7 +21,11 @@ data class Photo(
     val height: Int,
     val bucket: String,
     val bucketId: String,
-)
+    val favorite: Boolean = false,
+    val mime: String = "",
+) {
+    val isScreenshot: Boolean get() = bucket.contains("screenshot", ignoreCase = true)
+}
 
 data class Folder(val id: String, val name: String, val count: Int, val cover: Uri)
 
@@ -45,7 +49,8 @@ class MediaRepo(private val resolver: ContentResolver) {
             MediaStore.Images.Media.HEIGHT,
             MediaStore.Images.Media.BUCKET_DISPLAY_NAME,
             MediaStore.Images.Media.BUCKET_ID,
-        )
+            MediaStore.Images.Media.MIME_TYPE,
+        ) + if (android.os.Build.VERSION.SDK_INT >= 30) arrayOf(MediaStore.MediaColumns.IS_FAVORITE) else emptyArray()
         val out = ArrayList<Photo>()
         resolver.query(collection, projection, null, null, "${MediaStore.Images.Media.DATE_ADDED} DESC")?.use { c ->
             val iId = c.getColumnIndexOrThrow(MediaStore.Images.Media._ID)
@@ -57,6 +62,8 @@ class MediaRepo(private val resolver: ContentResolver) {
             val iH = c.getColumnIndexOrThrow(MediaStore.Images.Media.HEIGHT)
             val iB = c.getColumnIndexOrThrow(MediaStore.Images.Media.BUCKET_DISPLAY_NAME)
             val iBid = c.getColumnIndexOrThrow(MediaStore.Images.Media.BUCKET_ID)
+            val iMime = c.getColumnIndexOrThrow(MediaStore.Images.Media.MIME_TYPE)
+            val iFav = if (android.os.Build.VERSION.SDK_INT >= 30) c.getColumnIndex(MediaStore.MediaColumns.IS_FAVORITE) else -1
             while (c.moveToNext()) {
                 val id = c.getLong(iId)
                 val taken = c.getLong(iTaken).takeIf { it > 0 } ?: (c.getLong(iAdded) * 1000)
@@ -71,6 +78,8 @@ class MediaRepo(private val resolver: ContentResolver) {
                         height = c.getInt(iH),
                         bucket = c.getString(iB) ?: "",
                         bucketId = c.getString(iBid) ?: "",
+                        favorite = iFav >= 0 && c.getInt(iFav) == 1,
+                        mime = c.getString(iMime) ?: "",
                     ),
                 )
             }
