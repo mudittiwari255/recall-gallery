@@ -17,7 +17,14 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
+import app.recall.core.VisionInputs
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancelChildren
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.concurrent.TimeUnit
 
@@ -37,6 +44,12 @@ object Work {
     fun startIndexing(context: Context) {
         val req = OneTimeWorkRequestBuilder<IndexWorker>().build()
         WorkManager.getInstance(context).enqueueUniqueWork(INDEX, ExistingWorkPolicy.KEEP, req)
+    }
+
+    /** Restarts indexing so changed settings (folders, dates, order, detail) take effect immediately. */
+    fun restartIndexing(context: Context) {
+        val req = OneTimeWorkRequestBuilder<IndexWorker>().build()
+        WorkManager.getInstance(context).enqueueUniqueWork(INDEX, ExistingWorkPolicy.REPLACE, req)
     }
 
     fun stopIndexing(context: Context) {
@@ -72,6 +85,13 @@ object Work {
     }
 }
 
+/** "about 2 h 15 m", "about 4 m", "under a minute". */
+fun formatEta(seconds: Long): String = when {
+    seconds < 60 -> "under a minute"
+    seconds < 3600 -> "about ${seconds / 60} m"
+    else -> "about ${seconds / 3600} h ${(seconds % 3600) / 60} m"
+}
+
 class DownloadWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun getForegroundInfo() =
         Work.foregroundInfo(applicationContext, 1, "Downloading search model", "Starting…", 0, 0)
@@ -105,9 +125,17 @@ class DownloadWorker(context: Context, params: WorkerParameters) : CoroutineWork
     }
 }
 
+/**
+ * Embeds every selected photo that is new or changed.
+ *
+ * Decoding and preparing photos runs on two IO threads ahead of the model, so the model never waits on storage.
+ * Progress reports `done`, `total`, `msPerPhoto` (rolling average of the last 30) and `etaSec`.
+ */
 class IndexWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun getForegroundInfo() =
         Work.foregroundInfo(applicationContext, 2, "Indexing photos", "Preparing…", 0, 0)
+
+    private class Prepared(val photo: Photo, val inputs: VisionInputs?)
 
     override suspend fun doWork(): Result = withContext(Dispatchers.Default) {
         val app = applicationContext as RecallApp
@@ -117,31 +145,61 @@ class IndexWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
         val photos = app.media.loadAll()
         app.db.deleteMissing(photos.mapTo(HashSet()) { it.id })
         val processed = app.db.processed()
-        val todo = photos.filter { processed[it.id] != it.modified }
-        val total = photos.size
+        val selection = app.indexSelection(photos)
+        val todo = selection.filter { processed[it.id] != it.modified }
+        val total = selection.size
         var done = total - todo.size
+        if (todo.isEmpty()) return@withContext Result.success()
+
         val budget = app.settings.photoDetail
+        val side = app.media.decodeSideFor(budget)
         val embedder = try { app.models.embedder() } catch (e: Exception) { return@withContext Result.retry() }
 
-        for (photo in todo) {
-            if (isStopped) break
-            try {
-                val image = app.media.decodeForModel(photo.uri)
-                val vec = embedder.embedImage(image, budget)
-                app.db.put(photo.id, photo.modified, budget, vec)
-            } catch (e: OutOfMemoryError) {
-                app.db.markFailed(photo.id, photo.modified)
-                System.gc()
-            } catch (e: Exception) {
-                app.db.markFailed(photo.id, photo.modified)
-            }
-            done++
-            setProgress(workDataOf("done" to done, "total" to total))
-            if (done % 5 == 0 || done == total) {
-                runCatching {
-                    setForeground(Work.foregroundInfo(applicationContext, 2, "Indexing photos", "$done of $total", done, total))
+        val recent = ArrayDeque<Long>()
+        var last = System.nanoTime()
+
+        coroutineScope {
+            val queue = Channel<Prepared>(capacity = 4)
+            val producers = (0 until 2).map { lane ->
+                launch(Dispatchers.IO) {
+                    var i = lane
+                    while (i < todo.size && isActive) {
+                        val p = todo[i]
+                        val inputs = try {
+                            embedder.prepareImage(app.media.decodeForModel(p.uri, side), budget)
+                        } catch (t: Throwable) { null } // includes OutOfMemoryError on huge images
+                        queue.send(Prepared(p, inputs))
+                        i += 2
+                    }
                 }
             }
+            launch { producers.joinAll(); queue.close() }
+
+            for (item in queue) {
+                if (isStopped) break
+                val vec = item.inputs?.let { runCatching { embedder.embedPrepared(it) }.getOrNull() }
+                if (vec != null) app.db.put(item.photo.id, item.photo.modified, budget, vec)
+                else app.db.markFailed(item.photo.id, item.photo.modified)
+                done++
+
+                val now = System.nanoTime()
+                recent.addLast(now - last); last = now
+                if (recent.size > 30) recent.removeFirst()
+                val msPer = recent.average().toLong() / 1_000_000
+                val eta = msPer * (total - done) / 1000
+                setProgress(workDataOf("done" to done, "total" to total, "msPerPhoto" to msPer, "etaSec" to eta))
+                if (done % 5 == 0 || done == total) {
+                    runCatching {
+                        setForeground(
+                            Work.foregroundInfo(
+                                applicationContext, 2, "Indexing photos",
+                                "$done of $total · ${formatEta(eta)} left", done, total,
+                            ),
+                        )
+                    }
+                }
+            }
+            coroutineContext.cancelChildren()
         }
         Result.success()
     }

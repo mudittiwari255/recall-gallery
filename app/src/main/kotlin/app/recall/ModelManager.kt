@@ -29,8 +29,7 @@ class ModelManager(private val context: Context) {
         synchronized(this) {
             embedder?.let { return it }
             check(isReady) { "Model is not downloaded yet" }
-            val threads = Runtime.getRuntime().availableProcessors().coerceIn(2, 6)
-            return Embedder(dir, DTYPE, threads).also { embedder = it }
+            return Embedder(dir, DTYPE, RecallApp.performanceCores()).also { embedder = it }
         }
     }
 

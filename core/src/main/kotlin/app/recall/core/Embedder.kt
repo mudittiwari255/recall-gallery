@@ -7,6 +7,8 @@ import com.google.gson.JsonParser
 import java.io.File
 import java.nio.FloatBuffer
 import java.nio.LongBuffer
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 import kotlin.math.sqrt
 
 /**
@@ -30,7 +32,8 @@ class Embedder(
 
     private val textSession: OrtSession by lazy { open("model_$dtype.onnx") }
     private val visionSession: OrtSession by lazy { open("vision_encoder_$dtype.onnx") }
-    private val lock = Any()
+    // Fair, so a search waiting behind background indexing gets the next turn instead of starving
+    private val lock = ReentrantLock(true)
 
     private fun open(name: String): OrtSession {
         val opts = OrtSession.SessionOptions().apply {
@@ -48,7 +51,7 @@ class Embedder(
 
     fun embedDocument(text: String, title: String = "none"): FloatArray = embedText("title: $title | text: $text")
 
-    fun embedText(text: String): FloatArray = synchronized(lock) {
+    fun embedText(text: String): FloatArray = lock.withLock {
         val ids = tokenizer.encode(text)
         runText(ids, null)
     }
@@ -65,7 +68,7 @@ class Embedder(
 
     fun embedImage(image: ArgbImage, maxSoftTokens: Int = 280): FloatArray = embedPrepared(prepareImage(image, maxSoftTokens))
 
-    fun embedPrepared(v: VisionInputs): FloatArray = synchronized(lock) {
+    fun embedPrepared(v: VisionInputs): FloatArray = lock.withLock {
         val features = OnnxTensor.createTensor(
             env, FloatBuffer.wrap(v.pixelValues), longArrayOf(1, v.maxPatches.toLong(), v.patchDim.toLong()),
         ).use { pixels ->
@@ -120,7 +123,7 @@ class Embedder(
     }
 
     override fun close() {
-        synchronized(lock) {
+        lock.withLock {
             runCatching { textSession.close() }
             runCatching { visionSession.close() }
         }

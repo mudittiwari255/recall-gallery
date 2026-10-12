@@ -4,10 +4,11 @@ import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import app.recall.core.VectorIndex
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
-/** Stores one embedding per photo, keyed by its MediaStore id. Vectors are cached in memory for search. */
+/** Stores one embedding per photo, keyed by its MediaStore id, plus an in-memory index for search. */
 class IndexDb(context: Context) : SQLiteOpenHelper(context, "index.db", null, 1) {
 
     override fun onCreate(db: SQLiteDatabase) {
@@ -44,7 +45,7 @@ class IndexDb(context: Context) : SQLiteOpenHelper(context, "index.db", null, 1)
             },
             SQLiteDatabase.CONFLICT_REPLACE,
         )
-        synchronized(this) { cache?.put(id, vec) }
+        loadedIndex()?.put(id, vec)
     }
 
     fun markFailed(id: Long, modified: Long) {
@@ -58,36 +59,48 @@ class IndexDb(context: Context) : SQLiteOpenHelper(context, "index.db", null, 1)
     fun deleteMissing(existing: Set<Long>) {
         val gone = processed().keys - existing
         if (gone.isEmpty()) return
-        writableDatabase.beginTransaction()
+        val db = writableDatabase
+        db.beginTransaction()
         try {
-            gone.forEach { writableDatabase.delete("photos", "id = ?", arrayOf(it.toString())) }
-            writableDatabase.setTransactionSuccessful()
+            gone.forEach { db.delete("photos", "id = ?", arrayOf(it.toString())) }
+            db.setTransactionSuccessful()
         } finally {
-            writableDatabase.endTransaction()
+            db.endTransaction()
         }
-        synchronized(this) { gone.forEach { cache?.remove(it) } }
+        loadedIndex()?.let { idx -> gone.forEach(idx::remove) }
     }
 
     fun clear() {
         writableDatabase.delete("photos", null, null)
-        synchronized(this) { cache = null }
+        loadedIndex()?.clear()
     }
 
     fun indexedCount(): Int =
         readableDatabase.rawQuery("SELECT COUNT(*) FROM photos WHERE failed = 0", null).use { c -> c.moveToFirst(); c.getInt(0) }
 
-    private var cache: HashMap<Long, FloatArray>? = null
+    fun indexedIds(): Set<Long> {
+        val out = HashSet<Long>()
+        readableDatabase.rawQuery("SELECT id FROM photos WHERE failed = 0", null).use { c -> while (c.moveToNext()) out.add(c.getLong(0)) }
+        return out
+    }
 
-    /** Every stored vector, loaded once and then kept up to date in memory. */
-    fun vectors(): Map<Long, FloatArray> = synchronized(this) {
-        cache ?: HashMap<Long, FloatArray>().also { map ->
+    @Volatile private var index: VectorIndex? = null
+    private fun loadedIndex(): VectorIndex? = index
+
+    /** The search index, loaded from the database on first use (about a second for 20,000 photos). */
+    fun index(): VectorIndex {
+        index?.let { return it }
+        synchronized(this) {
+            index?.let { return it }
+            val idx = VectorIndex()
             readableDatabase.rawQuery("SELECT id, vec FROM photos WHERE failed = 0 AND vec IS NOT NULL", null).use { c ->
                 while (c.moveToNext()) {
                     val fb = ByteBuffer.wrap(c.getBlob(1)).order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer()
-                    map[c.getLong(0)] = FloatArray(fb.remaining()).also { fb.get(it) }
+                    idx.put(c.getLong(0), FloatArray(fb.remaining()).also { fb.get(it) })
                 }
             }
-            cache = map
-        }.let { HashMap(it) }
+            index = idx
+            return idx
+        }
     }
 }

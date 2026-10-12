@@ -20,7 +20,15 @@ data class Photo(
     val width: Int,
     val height: Int,
     val bucket: String,
+    val bucketId: String,
 )
+
+data class Folder(val id: String, val name: String, val count: Int, val cover: Uri)
+
+/** Folders sorted by photo count, largest first. */
+fun foldersOf(photos: List<Photo>): List<Folder> =
+    photos.groupBy { it.bucketId }.map { (id, ps) -> Folder(id, ps.first().bucket.ifEmpty { "Unnamed" }, ps.size, ps.first().uri) }
+        .sortedByDescending { it.count }
 
 /** Reads the device photo library through MediaStore. */
 class MediaRepo(private val resolver: ContentResolver) {
@@ -36,6 +44,7 @@ class MediaRepo(private val resolver: ContentResolver) {
             MediaStore.Images.Media.WIDTH,
             MediaStore.Images.Media.HEIGHT,
             MediaStore.Images.Media.BUCKET_DISPLAY_NAME,
+            MediaStore.Images.Media.BUCKET_ID,
         )
         val out = ArrayList<Photo>()
         resolver.query(collection, projection, null, null, "${MediaStore.Images.Media.DATE_ADDED} DESC")?.use { c ->
@@ -47,6 +56,7 @@ class MediaRepo(private val resolver: ContentResolver) {
             val iW = c.getColumnIndexOrThrow(MediaStore.Images.Media.WIDTH)
             val iH = c.getColumnIndexOrThrow(MediaStore.Images.Media.HEIGHT)
             val iB = c.getColumnIndexOrThrow(MediaStore.Images.Media.BUCKET_DISPLAY_NAME)
+            val iBid = c.getColumnIndexOrThrow(MediaStore.Images.Media.BUCKET_ID)
             while (c.moveToNext()) {
                 val id = c.getLong(iId)
                 val taken = c.getLong(iTaken).takeIf { it > 0 } ?: (c.getLong(iAdded) * 1000)
@@ -60,11 +70,20 @@ class MediaRepo(private val resolver: ContentResolver) {
                         width = c.getInt(iW),
                         height = c.getInt(iH),
                         bucket = c.getString(iB) ?: "",
+                        bucketId = c.getString(iBid) ?: "",
                     ),
                 )
             }
         }
+        out.sortByDescending { it.dateTaken }
         return out
+    }
+
+    /** Long side to decode at for a vision token budget: a bit above what the model's resize keeps. */
+    fun decodeSideFor(budget: Int): Int = when {
+        budget <= 70 -> 640
+        budget <= 140 -> 896
+        else -> 1280
     }
 
     /**
