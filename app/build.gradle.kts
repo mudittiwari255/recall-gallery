@@ -42,7 +42,12 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName(if (uploadStore != null) "upload" else "shared")
+            // UNSIGNED_BUNDLE=1 builds a Play bundle with no signature, to be signed with the upload key elsewhere
+            signingConfig = when {
+                System.getenv("UNSIGNED_BUNDLE") == "1" -> null
+                uploadStore != null -> signingConfigs.getByName("upload")
+                else -> signingConfigs.getByName("shared")
+            }
         }
         debug {
             signingConfig = signingConfigs.getByName("shared")

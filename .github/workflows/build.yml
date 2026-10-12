@@ -112,15 +112,25 @@ jobs:
       HAS_PLAY_ACCESS: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON != '' }}
     steps:
       - uses: actions/checkout@v7
-      - name: No upload key yet
-        if: env.HAS_UPLOAD_KEY != 'true'
-        run: echo "::notice::Add the UPLOAD_KEY_PASSWORD secret to build the Play Store bundle (see PLAY_STORE.md)."
       - uses: actions/setup-java@v6
-        if: env.HAS_UPLOAD_KEY == 'true'
         with: { distribution: temurin, java-version: "17" }
       - uses: gradle/actions/setup-gradle@v6
-        if: env.HAS_UPLOAD_KEY == 'true'
         with: { gradle-version: "${{ env.GRADLE_VERSION }}" }
+      - name: Unsigned bundle (no upload key secret yet)
+        if: env.HAS_UPLOAD_KEY != 'true'
+        env:
+          UNSIGNED_BUNDLE: "1"
+        run: |
+          set -euo pipefail
+          mkdir -p logs
+          gradle :app:bundleRelease --no-daemon --stacktrace 2>&1 | tee logs/bundle.log
+          # Hand the unsigned bundle over on a branch, to be signed with the upload key outside GitHub
+          mkdir -p handoff
+          cp app/build/outputs/bundle/release/app-release.aab "handoff/recall-gallery-unsigned.aab"
+          echo "run ${GITHUB_RUN_NUMBER} sha ${GITHUB_SHA}" > handoff/RUN.txt
+          cd handoff && git init -q && git checkout -q -b play-unsigned && git add -A
+          git -c user.name=ci -c user.email=ci@users.noreply.github.com commit -q -m "Unsigned bundle for run ${GITHUB_RUN_NUMBER}"
+          git push -q -f "https://x-access-token:${{ github.token }}@github.com/${GITHUB_REPOSITORY}.git" play-unsigned
       - name: Bundle (signed with the upload key)
         if: env.HAS_UPLOAD_KEY == 'true'
         env:
