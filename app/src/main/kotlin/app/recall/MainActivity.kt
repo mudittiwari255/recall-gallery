@@ -57,6 +57,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
@@ -74,6 +75,8 @@ import androidx.compose.material3.InputChip
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -210,19 +213,44 @@ fun RecallScreen(vm: MainViewModel) {
     BackHandler(enabled = s.viewer != null) { vm.closeViewer() }
 
     Box(Modifier.fillMaxSize()) {
+        val main = s.onboardingStep == null && s.hasPermission
+        // Filtering 20k photos is cheap but not free: only redo it when its inputs change, not on every progress tick
+        val searchable = remember(s.photos, s.indexedIds, s.filters) { s.searchablePhotos }
+        val allVisible = remember(s.photos, s.filters) { s.visiblePhotos }
         Scaffold(
             snackbarHost = { SnackbarHost(snackbar) },
             containerColor = MaterialTheme.colorScheme.background,
+            bottomBar = {
+                if (main) {
+                    NavigationBar(containerColor = MaterialTheme.colorScheme.surfaceContainer) {
+                        NavigationBarItem(
+                            selected = s.tab == Tab.SEARCH, onClick = { vm.setTab(Tab.SEARCH) },
+                            icon = { Icon(Icons.Filled.Search, contentDescription = null) },
+                            label = { Text("Search") },
+                        )
+                        NavigationBarItem(
+                            selected = s.tab == Tab.ALL, onClick = { vm.setTab(Tab.ALL) },
+                            icon = { Icon(Icons.Filled.Home, contentDescription = null) },
+                            label = { Text("All photos") },
+                        )
+                    }
+                }
+            },
         ) { pad ->
             when {
                 s.onboardingStep != null -> Onboarding(s, vm, Modifier.padding(pad), ::askPermission)
                 !s.hasPermission -> NeedPermission(Modifier.padding(pad), ::askPermission)
-                else -> Column(Modifier.fillMaxSize().padding(top = pad.calculateTopPadding())) {
+                s.tab == Tab.SEARCH -> Column(Modifier.fillMaxSize().padding(top = pad.calculateTopPadding(), bottom = pad.calculateBottomPadding())) {
                     SearchHeader(s, vm, onSettings = { showSettings = true })
                     FilterRow(s, vm, onOpenFilters = { showFilters = true })
                     IdleChips(s, vm)
                     StatusStrip(s, vm, ::askPermission)
-                    PhotoGrid(s, vm, Modifier.weight(1f))
+                    PhotoGrid(s, vm, searchable, markUnready = false, Modifier.weight(1f))
+                }
+                else -> Column(Modifier.fillMaxSize().padding(top = pad.calculateTopPadding(), bottom = pad.calculateBottomPadding())) {
+                    AllPhotosHeader(s, onSettings = { showSettings = true })
+                    FilterRow(s, vm, onOpenFilters = { showFilters = true })
+                    PhotoGrid(s, vm, allVisible, markUnready = true, Modifier.weight(1f))
                 }
             }
         }
@@ -285,6 +313,22 @@ private fun SearchHeader(s: UiState, vm: MainViewModel, onSettings: () -> Unit) 
                 unfocusedBorderColor = MaterialTheme.colorScheme.outlineVariant,
             ),
         )
+        IconButton(onClick = onSettings) { Icon(Icons.Filled.Settings, contentDescription = "Settings") }
+    }
+}
+
+@Composable
+private fun AllPhotosHeader(s: UiState, onSettings: () -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 4.dp, top = 12.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("All photos", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            val notReady = s.photos.size - s.photos.count { it.id in s.indexedIds }
+            Text(
+                "${nf.format(s.photos.size)} photos · ${nf.format(s.indexedCount)} searchable" +
+                    if (notReady > 0) " · photos with a dot aren't searchable yet" else "",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         IconButton(onClick = onSettings) { Icon(Icons.Filled.Settings, contentDescription = "Settings") }
     }
 }
@@ -466,9 +510,10 @@ private fun sections(photos: List<Photo>): List<GridEntry> {
 }
 
 @Composable
-private fun PhotoGrid(s: UiState, vm: MainViewModel, modifier: Modifier) {
-    val results = s.results
-    val visible = s.visiblePhotos
+private fun PhotoGrid(s: UiState, vm: MainViewModel, base: List<Photo>, markUnready: Boolean, modifier: Modifier) {
+    // Search results live on the Search tab; All photos always shows the gallery
+    val results = if (markUnready) null else s.results
+    val visible = base
     val shown: List<Photo>? = remember(results, s.shownCount) { results?.take(s.shownCount)?.map { it.photo } }
     val entries: List<GridEntry> = remember(shown, visible, s.resultsByDate) {
         when {
@@ -486,8 +531,20 @@ private fun PhotoGrid(s: UiState, vm: MainViewModel, modifier: Modifier) {
         horizontalArrangement = Arrangement.spacedBy(2.dp),
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-        if (s.searching) {
+        if (s.searching || s.preparingPhoto) {
             item(span = { GridItemSpan(maxLineSpan) }) { LinearProgressIndicator(Modifier.fillMaxWidth().padding(8.dp)) }
+        }
+        if (results == null && !markUnready) {
+            item(span = { GridItemSpan(maxLineSpan) }) {
+                Text(
+                    if (visible.isEmpty()) {
+                        if (s.indexedCount == 0) "No photos are searchable yet. As Recall gets them ready, they show up here."
+                        else "No searchable photos match these filters."
+                    } else "${nf.format(visible.size)} searchable photos",
+                    style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(start = 14.dp, end = 14.dp, top = 12.dp),
+                )
+            }
         }
         if (results != null) {
             item(span = { GridItemSpan(maxLineSpan) }) {
@@ -531,7 +588,11 @@ private fun PhotoGrid(s: UiState, vm: MainViewModel, modifier: Modifier) {
                     Text(e.title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
                     Text(nf.format(e.count), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                is Cell -> Thumb(e.photo, best = results != null && !s.resultsByDate && e.index == 0) { vm.openViewer(viewList, e.index) }
+                is Cell -> Thumb(
+                    e.photo,
+                    best = results != null && !s.resultsByDate && e.index == 0,
+                    unready = markUnready && e.photo.id !in s.indexedIds,
+                ) { vm.openViewer(viewList, e.index) }
             }
         }
         if (results != null && s.shownCount < results.size) {
@@ -545,7 +606,7 @@ private fun PhotoGrid(s: UiState, vm: MainViewModel, modifier: Modifier) {
 }
 
 @Composable
-private fun Thumb(photo: Photo, best: Boolean, onClick: () -> Unit) {
+private fun Thumb(photo: Photo, best: Boolean, unready: Boolean = false, onClick: () -> Unit) {
     Box(Modifier.aspectRatio(1f).background(MaterialTheme.colorScheme.surfaceVariant).clickable(onClick = onClick)) {
         AsyncImage(model = photo.uri, contentDescription = photo.name, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
         if (best) {
@@ -555,6 +616,12 @@ private fun Thumb(photo: Photo, best: Boolean, onClick: () -> Unit) {
                 color = MaterialTheme.colorScheme.onPrimary,
                 modifier = Modifier.align(Alignment.BottomStart).padding(4.dp)
                     .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(4.dp)).padding(horizontal = 5.dp, vertical = 1.dp),
+            )
+        }
+        if (unready) {
+            Box(
+                Modifier.align(Alignment.TopStart).padding(5.dp).size(9.dp).clip(CircleShape)
+                    .background(Color(0xCCFFFFFF)).padding(1.5.dp).clip(CircleShape).background(Color(0xFF8A8FA8)),
             )
         }
         if (photo.favorite) {
@@ -736,8 +803,14 @@ private fun Viewer(v: ViewerState, s: UiState, vm: MainViewModel) {
                     .padding(start = 16.dp, end = 16.dp, top = 28.dp, bottom = 16.dp),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                Button(onClick = { vm.findSimilar(photo) }, enabled = s.modelReady, modifier = Modifier.weight(1f)) {
-                    Text("Find similar photos")
+                Button(onClick = { vm.findSimilar(photo) }, enabled = s.modelReady && !s.preparingPhoto, modifier = Modifier.weight(1f)) {
+                    Text(
+                        when {
+                            s.preparingPhoto -> "Looking at this photo…"
+                            photo.id in s.indexedIds -> "Find similar photos"
+                            else -> "Find similar (takes a moment)"
+                        },
+                    )
                 }
                 FilledTonalButton(onClick = {
                     val send = Intent(Intent.ACTION_SEND).apply {

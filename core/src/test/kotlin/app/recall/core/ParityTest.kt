@@ -95,6 +95,35 @@ class ParityTest {
     }
 
     @Test
+    fun batchedVisionMatchesSingleAndReportsSpeed() {
+        val paths = ref.getAsJsonArray("images").map { it.asJsonObject.get("path").asString }.distinct()
+        val images = paths.map { path ->
+            val bi = ImageIO.read(File(path))
+            ArgbImage(bi.width, bi.height, bi.getRGB(0, 0, bi.width, bi.height, null, 0, bi.width))
+        }
+        // Four different inputs: each image and a mirrored copy
+        val inputs = images.flatMap { img ->
+            val mirrored = IntArray(img.pixels.size) { i -> val y = i / img.width; val x = i % img.width; img.pixels[y * img.width + (img.width - 1 - x)] }
+            listOf(img, ArgbImage(img.width, img.height, mirrored))
+        }.take(4).map { embedder.prepareImage(it, 70) }
+
+        embedder.embedPrepared(inputs[0]) // warm up
+        val singles: List<FloatArray>
+        val t0 = System.nanoTime()
+        singles = inputs.map { embedder.embedPrepared(it) }
+        val singleMs = (System.nanoTime() - t0) / 1e6
+        val batched: List<FloatArray>
+        val t1 = System.nanoTime()
+        batched = embedder.embedPreparedBatch(inputs)
+        val batchMs = (System.nanoTime() - t1) / 1e6
+        for (i in inputs.indices) {
+            val c = Embedder.dot(singles[i], batched[i])
+            assertTrue("batched result $i differs (cos=$c)", c > 0.999f)
+        }
+        println("BENCH vision batch=${inputs.size}: one-by-one %.0f ms, batched %.0f ms, speedup %.2fx".format(singleMs, batchMs, singleMs / batchMs))
+    }
+
+    @Test
     fun searchRanksTheRightImage() {
         val cats = embedder.embedQuery("cats sleeping on a couch")
         val turtle = embedder.embedQuery("a turtle swimming in the ocean")

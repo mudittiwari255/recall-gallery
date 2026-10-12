@@ -68,11 +68,28 @@ class Embedder(
 
     fun embedImage(image: ArgbImage, maxSoftTokens: Int = 280): FloatArray = embedPrepared(prepareImage(image, maxSoftTokens))
 
-    fun embedPrepared(v: VisionInputs): FloatArray = lock.withLock {
+    fun embedPrepared(v: VisionInputs): FloatArray = embedPreparedBatch(listOf(v))[0]
+
+    /**
+     * Embeds several prepared images, running the vision encoder once for the whole batch (the text model still runs
+     * per image). All images must share the same token budget.
+     */
+    fun embedPreparedBatch(batch: List<VisionInputs>): List<FloatArray> = lock.withLock {
+        require(batch.isNotEmpty())
+        val maxPatches = batch[0].maxPatches
+        val patchDim = batch[0].patchDim
+        require(batch.all { it.maxPatches == maxPatches && it.patchDim == patchDim }) { "Mixed token budgets in one batch" }
+        val b = batch.size
+        val pixelData = FloatArray(b * maxPatches * patchDim)
+        val posData = LongArray(b * maxPatches * 2)
+        batch.forEachIndexed { i, v ->
+            System.arraycopy(v.pixelValues, 0, pixelData, i * maxPatches * patchDim, maxPatches * patchDim)
+            System.arraycopy(v.positionIds, 0, posData, i * maxPatches * 2, maxPatches * 2)
+        }
         val features = OnnxTensor.createTensor(
-            env, FloatBuffer.wrap(v.pixelValues), longArrayOf(1, v.maxPatches.toLong(), v.patchDim.toLong()),
+            env, FloatBuffer.wrap(pixelData), longArrayOf(b.toLong(), maxPatches.toLong(), patchDim.toLong()),
         ).use { pixels ->
-            OnnxTensor.createTensor(env, LongBuffer.wrap(v.positionIds), longArrayOf(1, v.maxPatches.toLong(), 2)).use { pos ->
+            OnnxTensor.createTensor(env, LongBuffer.wrap(posData), longArrayOf(b.toLong(), maxPatches.toLong(), 2)).use { pos ->
                 val inputs = HashMap<String, OnnxTensor>()
                 for (name in visionSession.inputNames) {
                     inputs[name] = when (name) {
@@ -88,10 +105,21 @@ class Embedder(
                 }
             }
         }
-        val n = features.size / hiddenSize
-        check(n == v.numSoftTokens) { "Vision encoder returned $n soft tokens, expected ${v.numSoftTokens}" }
-        runText(imageTokenIds(n), features)
+        // Soft tokens come back flattened across the batch, in order
+        val total = batch.sumOf { it.numSoftTokens }
+        check(features.size == total * hiddenSize) {
+            "Vision encoder returned ${features.size / hiddenSize} soft tokens, expected $total"
+        }
+        var offset = 0
+        batch.map { v ->
+            val n = v.numSoftTokens
+            val mine = features.copyOfRange(offset * hiddenSize, (offset + n) * hiddenSize)
+            offset += n
+            runText(imageIdsCache.getOrPut(n) { imageTokenIds(n) }, mine)
+        }
     }
+
+    private val imageIdsCache = HashMap<Int, IntArray>()
 
     private fun runText(ids: IntArray, imageFeatures: FloatArray?): FloatArray {
         val len = ids.size.toLong()

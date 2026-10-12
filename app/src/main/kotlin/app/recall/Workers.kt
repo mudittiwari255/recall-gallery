@@ -129,17 +129,41 @@ class DownloadWorker(context: Context, params: WorkerParameters) : CoroutineWork
     }
 }
 
+/** How many photos go through the vision model per run. 1 until benchmarks show batching helps. */
+const val VISION_BATCH = 1
+
+/**
+ * Near-identical shots: same folder and size, taken within 2 seconds (bursts, double taps of the shutter).
+ * They share one embedding, so the model runs once per burst. Screenshots never count, since quick screenshots
+ * of different screens look nothing alike.
+ */
+fun isBurst(a: Photo, b: Photo): Boolean =
+    !a.isScreenshot && !b.isScreenshot && a.width > 0 &&
+        a.bucketId == b.bucketId && a.width == b.width && a.height == b.height &&
+        kotlin.math.abs(a.dateTaken - b.dateTaken) <= 2000
+
+/** Groups consecutive near-identical photos; the first of each group is the one the model sees. */
+fun burstGroups(photos: List<Photo>): List<List<Photo>> {
+    val out = ArrayList<MutableList<Photo>>()
+    for (p in photos) {
+        val g = out.lastOrNull()
+        if (g != null && isBurst(g.last(), p)) g.add(p) else out.add(mutableListOf(p))
+    }
+    return out
+}
+
 /**
  * Embeds every selected photo that is new or changed.
  *
  * Decoding and preparing photos runs on two IO threads ahead of the model, so the model never waits on storage.
- * Progress reports `done`, `total`, `msPerPhoto` (rolling average of the last 30) and `etaSec`.
+ * Burst shots share one embedding. Progress reports `done`, `total`, `msPerPhoto` (over roughly the last 30 photos)
+ * and `etaSec`.
  */
 class IndexWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun getForegroundInfo() =
-        Work.foregroundInfo(applicationContext, 2, "Indexing photos", "Preparing…", 0, 0)
+        Work.foregroundInfo(applicationContext, 2, "Getting photos ready to search", "Starting…", 0, 0)
 
-    private class Prepared(val photo: Photo, val inputs: VisionInputs?)
+    private class Prepared(val group: List<Photo>, val inputs: VisionInputs?)
 
     override suspend fun doWork(): Result = withContext(Dispatchers.Default) {
         val app = applicationContext as RecallApp
@@ -154,54 +178,77 @@ class IndexWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
         val total = selection.size
         var done = total - todo.size
         if (todo.isEmpty()) return@withContext Result.success()
+        val groups = burstGroups(todo)
 
         val budget = app.settings.photoDetail
         val side = app.media.decodeSideFor(budget)
         val embedder = try { app.models.embedder() } catch (e: Exception) { return@withContext Result.retry() }
 
-        val recent = ArrayDeque<Long>()
-        var last = System.nanoTime()
+        // (time, photos done) samples for a rolling speed estimate
+        val samples = ArrayDeque<Pair<Long, Int>>()
+        samples.addLast(System.nanoTime() to done)
+
+        suspend fun report() {
+            val now = System.nanoTime()
+            samples.addLast(now to done)
+            while (samples.size > 2 && done - samples.first().second > 30) samples.removeFirst()
+            val (t0, d0) = samples.first()
+            val msPer = if (done > d0) (now - t0) / 1_000_000 / (done - d0) else 0L
+            val eta = msPer * (total - done) / 1000
+            setProgress(workDataOf("done" to done, "total" to total, "msPerPhoto" to msPer, "etaSec" to eta))
+            runCatching {
+                setForeground(
+                    Work.foregroundInfo(
+                        applicationContext, 2, "Getting photos ready to search",
+                        "$done of $total · ${formatEta(eta)} left", done, total,
+                    ),
+                )
+            }
+        }
+
+        fun save(group: List<Photo>, vec: FloatArray?) {
+            for (p in group) {
+                if (vec != null) app.db.put(p.id, p.modified, budget, vec) else app.db.markFailed(p.id, p.modified)
+            }
+            done += group.size
+        }
 
         coroutineScope {
-            val queue = Channel<Prepared>(capacity = 4)
+            val queue = Channel<Prepared>(capacity = 4 + VISION_BATCH)
             val producers = (0 until 2).map { lane ->
                 launch(Dispatchers.IO) {
                     var i = lane
-                    while (i < todo.size && isActive) {
-                        val p = todo[i]
+                    while (i < groups.size && isActive) {
+                        val g = groups[i]
                         val inputs = try {
-                            embedder.prepareImage(app.media.decodeForModel(p.uri, side), budget)
+                            embedder.prepareImage(app.media.decodeForModel(g[0].uri, side), budget)
                         } catch (t: Throwable) { null } // includes OutOfMemoryError on huge images
-                        queue.send(Prepared(p, inputs))
+                        queue.send(Prepared(g, inputs))
                         i += 2
                     }
                 }
             }
             launch { producers.joinAll(); queue.close() }
 
-            for (item in queue) {
+            var sinceReport = 0
+            for (first in queue) {
                 if (isStopped) break
-                val vec = item.inputs?.let { runCatching { embedder.embedPrepared(it) }.getOrNull() }
-                if (vec != null) app.db.put(item.photo.id, item.photo.modified, budget, vec)
-                else app.db.markFailed(item.photo.id, item.photo.modified)
-                done++
+                // Take whatever else is already prepared, up to the batch size
+                val batch = mutableListOf(first)
+                while (batch.size < VISION_BATCH) batch.add(queue.tryReceive().getOrNull() ?: break)
 
-                val now = System.nanoTime()
-                recent.addLast(now - last); last = now
-                if (recent.size > 30) recent.removeFirst()
-                val msPer = recent.average().toLong() / 1_000_000
-                val eta = msPer * (total - done) / 1000
-                setProgress(workDataOf("done" to done, "total" to total, "msPerPhoto" to msPer, "etaSec" to eta))
-                if (done % 5 == 0 || done == total) {
-                    runCatching {
-                        setForeground(
-                            Work.foregroundInfo(
-                                applicationContext, 2, "Indexing photos",
-                                "$done of $total · ${formatEta(eta)} left", done, total,
-                            ),
-                        )
-                    }
+                val ready = batch.filter { it.inputs != null }
+                val vecs: List<FloatArray?> = if (ready.isEmpty()) emptyList() else try {
+                    embedder.embedPreparedBatch(ready.map { it.inputs!! })
+                } catch (t: Throwable) {
+                    // Fall back to one at a time so one bad photo doesn't sink the batch
+                    ready.map { r -> runCatching { embedder.embedPrepared(r.inputs!!) }.getOrNull() }
                 }
+                ready.forEachIndexed { i, r -> save(r.group, vecs[i]) }
+                batch.filter { it.inputs == null }.forEach { save(it.group, null) }
+
+                sinceReport += batch.size
+                if (sinceReport >= 3 || done == total) { sinceReport = 0; report() }
             }
             coroutineContext.cancelChildren()
         }

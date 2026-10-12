@@ -26,7 +26,13 @@ data class Hit(val photo: Photo, val score: Float)
 /** The photo viewer shows one list (gallery or results) and can swipe through it. */
 data class ViewerState(val photos: List<Photo>, val start: Int)
 
+enum class Tab { SEARCH, ALL }
+
 data class UiState(
+    val tab: Tab = Tab.SEARCH,
+    /** Photos that can be found by search right now. */
+    val indexedIds: Set<Long> = emptySet(),
+    val preparingPhoto: Boolean = false,
     // welcome flow: 0 welcome, 1 privacy, 2 permissions, 3 folders, 4 download; null when finished
     val onboardingStep: Int? = 0,
     val permissionDenied: Boolean = false,
@@ -67,9 +73,13 @@ data class UiState(
     val chargingOnly: Boolean = false,
     val scopeDirty: Boolean = false,
 ) {
-    /** Gallery photos after filters. */
+    /** All photos after filters (the All photos tab). */
     val visiblePhotos: List<Photo>
         get() = if (filters.activeCount == 0) photos else filters.matcher().let { m -> photos.filter(m) }
+
+    /** Searchable photos after filters (the Search tab). */
+    val searchablePhotos: List<Photo>
+        get() = filters.matcher().let { m -> photos.filter { it.id in indexedIds && m(it) } }
 }
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -180,12 +190,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private suspend fun refreshCounts() {
         val photos = _state.value.photos
-        val (indexed, selected, selectedIndexed) = withContext(Dispatchers.IO) {
-            val ids = app.db.indexedIds()
+        val ids = withContext(Dispatchers.IO) { app.db.indexedIds() }
+        val (selected, selectedIndexed) = withContext(Dispatchers.Default) {
             val sel = app.indexSelection(photos)
-            Triple(ids.size, sel.size, sel.count { it.id in ids })
+            sel.size to sel.count { it.id in ids }
         }
-        _state.update { it.copy(indexedCount = indexed, selectedCount = selected, selectedIndexed = selectedIndexed) }
+        _state.update { it.copy(indexedIds = ids, indexedCount = ids.size, selectedCount = selected, selectedIndexed = selectedIndexed) }
     }
 
     // ------------------------------------------------------------------ welcome flow
@@ -350,7 +360,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val f = if (parsed.hasDate) {
                 s.filters.copy(from = parsed.from, until = parsed.until, dateLabel = parsed.label, dateFromQuery = true)
             } else if (s.filters.dateFromQuery) s.filters.clearDate() else s.filters
-            s.copy(query = raw, filters = f, recent = settings.recentSearches)
+            s.copy(query = raw, filters = f, recent = settings.recentSearches, tab = Tab.SEARCH)
         }
         searchJob?.cancel()
         if (parsed.text.isEmpty()) {
@@ -375,17 +385,37 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** Works for any photo: one that isn't ready yet is prepared on the spot (a second or two) and kept. */
     fun findSimilar(photo: Photo) {
         searchJob?.cancel()
         searchJob = viewModelScope.launch {
-            val vec = withContext(Dispatchers.IO) { app.db.index().get(photo.id) }
-            if (vec == null) { toast("This photo isn't ready for search yet. It will be soon."); return@launch }
+            var vec = withContext(Dispatchers.IO) { app.db.index().get(photo.id) }
+            if (vec == null) {
+                if (!app.models.isReady) { toast("Download the search engine first."); return@launch }
+                _state.update { it.copy(preparingPhoto = true) }
+                vec = try {
+                    withContext(Dispatchers.Default) {
+                        val budget = settings.photoDetail
+                        val v = app.models.embedder().embedImage(app.media.decodeForModel(photo.uri, app.media.decodeSideFor(budget)), budget)
+                        app.db.put(photo.id, photo.modified, budget, v)
+                        v
+                    }
+                } catch (e: Throwable) {
+                    null
+                } finally {
+                    _state.update { it.copy(preparingPhoto = false) }
+                }
+                if (vec == null) { toast("Couldn't read this photo."); return@launch }
+                refreshCounts()
+            }
             lastQueryVec = vec; lastExclude = photo.id; lastRaw = null
             val t0 = System.currentTimeMillis()
             showRanked(vec, photo.id, "Looks like this photo")
-            _state.update { it.copy(viewer = null, query = "", searchMillis = System.currentTimeMillis() - t0) }
+            _state.update { it.copy(viewer = null, query = "", tab = Tab.SEARCH, searchMillis = System.currentTimeMillis() - t0) }
         }
     }
+
+    fun setTab(t: Tab) = _state.update { it.copy(tab = t, viewer = null) }
 
     fun showMore() = _state.update { s -> s.copy(shownCount = minOf(s.shownCount + 30, s.results?.size ?: 0)) }
 
@@ -407,6 +437,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private suspend fun showByDate(title: String) {
         val hits = withContext(Dispatchers.Default) { _state.value.visiblePhotos.map { Hit(it, 0f) } }
+        _state.update { it.copy(tab = Tab.SEARCH) }
         _state.update { it.copy(results = hits, shownCount = minOf(hits.size, 60), resultsTitle = title, resultsByDate = true, searching = false, searchMillis = 0) }
     }
 
