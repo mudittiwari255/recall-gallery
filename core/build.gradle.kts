@@ -2,7 +2,7 @@ plugins {
     id("org.jetbrains.kotlin.jvm")
 }
 
-val ortVersion = "1.22.0"
+val ortVersion = "1.30.0"
 
 java {
     sourceCompatibility = JavaVersion.VERSION_17
