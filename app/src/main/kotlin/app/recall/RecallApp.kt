@@ -17,10 +17,6 @@ class RecallApp : Application() {
     /** Indexing pauses until this time, so a search runs at full speed. */
     @Volatile var searchBusyUntil: Long = 0L
 
-    /** Android's heat level (PowerManager.THERMAL_STATUS_*); 2+ means the phone is being slowed down. */
-    fun thermalStatus(): Int =
-        runCatching { getSystemService(android.os.PowerManager::class.java).currentThermalStatus }.getOrDefault(0)
-
     /** Full or partial (Android 14 "selected photos") access both count. */
     fun hasPhotoPermission(): Boolean = photoPermissions().any {
         ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
@@ -66,10 +62,15 @@ class RecallApp : Application() {
     }
 }
 
-enum class DateRange(val label: String, val years: Int) {
-    ALL("All time", 0), Y1("1 year", 1), Y3("3 years", 3), Y5("5 years", 5);
+enum class DateRange(val label: String, val days: Int) {
+    ALL("All time", 0), Y5("Last 5 years", 5 * 365), Y3("Last 3 years", 3 * 365), Y1("Last year", 365), M1("Last month", 30);
 
-    fun since(): Long = if (years == 0) 0L else System.currentTimeMillis() - years * 365L * 24 * 3600 * 1000
+    fun since(): Long = if (days == 0) 0L else System.currentTimeMillis() - days * 24L * 3600 * 1000
+
+    companion object {
+        /** Display order, widest first. */
+        val choices = listOf(ALL, Y5, Y3, Y1, M1)
+    }
 }
 
 class Settings(context: Context) {

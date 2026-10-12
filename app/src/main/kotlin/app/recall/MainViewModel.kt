@@ -33,7 +33,6 @@ data class UiState(
     /** Photos that can be found by search right now. */
     val indexedIds: Set<Long> = emptySet(),
     val preparingPhoto: Boolean = false,
-    val thermal: Int = 0,
     // welcome flow: 0 welcome, 1 privacy, 2 permissions, 3 folders, 4 download; null when finished
     val onboardingStep: Int? = 0,
     val permissionDenied: Boolean = false,
@@ -120,6 +119,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             Work.schedulePeriodic(app, replace = true)
             settings.periodicV2 = true
         }
+        if (app.models.isReady) Work.watchNewPhotos(app)
         app.contentResolver.registerContentObserver(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, true, observer)
         viewModelScope.launch {
             work.getWorkInfosForUniqueWorkFlow(Work.DOWNLOAD).collect { infos ->
@@ -151,7 +151,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 indexTotal = p?.getInt("total", it.indexTotal) ?: it.indexTotal,
                 msPerPhoto = p?.getLong("msPerPhoto", 0L)?.takeIf { v -> v > 0 } ?: it.msPerPhoto,
                 etaSec = p?.getLong("etaSec", it.etaSec) ?: it.etaSec,
-                thermal = if (running) app.thermalStatus() else 0,
             )
         }
         val now = System.currentTimeMillis()

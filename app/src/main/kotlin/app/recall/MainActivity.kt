@@ -428,13 +428,12 @@ private fun StatusStrip(s: UiState, vm: MainViewModel, askPermission: () -> Unit
         s.indexing -> StatusCard(modifier) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text("Getting your photos ready to search", fontWeight = FontWeight.Bold)
+                    Text("One-time setup", fontWeight = FontWeight.Bold)
                     Text(
                         buildString {
-                            if (s.indexTotal > 0) append("${nf.format(s.indexDone)} of ${nf.format(s.indexTotal)}")
+                            if (s.indexTotal > 0) append("${nf.format(s.indexDone)} of ${nf.format(s.indexTotal)} photos")
                             if (s.msPerPhoto > 0) append(" · ${friendlyDuration(s.etaSec)} left")
-                            else append(" · working out how long…")
-                        },
+                        }.ifEmpty { "Starting…" },
                         color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall,
                     )
                 }
@@ -444,35 +443,30 @@ private fun StatusStrip(s: UiState, vm: MainViewModel, askPermission: () -> Unit
             if (s.indexTotal > 0) LinearProgressIndicator(progress = { s.indexDone.toFloat() / s.indexTotal }, modifier = Modifier.fillMaxWidth())
             else LinearProgressIndicator(Modifier.fillMaxWidth())
             Spacer(Modifier.height(6.dp))
-            if (s.thermal >= 2) {
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    "Your phone is warm, so Android is slowing Recall down to cool it. It speeds up again once the phone cools; " +
-                        "a cool place and taking it out of its case help.",
-                    color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall,
-                )
-            }
             Text(
-                "Search already works on the photos that are ready." +
-                    if (s.msPerPhoto > 0) " (%.1f seconds per photo)".format(s.msPerPhoto / 1000.0) else "",
+                "Only needed once. New photos are added automatically.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall,
             )
         }
         pending > 0 && s.chargingOnly -> Row(modifier, verticalAlignment = Alignment.CenterVertically) {
             Text(
-                "${nf.format(pending)} photos will be prepared when you plug in your charger.",
+                "${nf.format(pending)} photos left · continues when charging",
                 color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f),
             )
         }
-        else -> Row(modifier, verticalAlignment = Alignment.CenterVertically) {
+        pending > 0 -> Row(modifier, verticalAlignment = Alignment.CenterVertically) {
             Text(
-                if (pending > 0) "${nf.format(s.selectedIndexed)} of ${nf.format(s.selectedCount)} photos ready to search"
-                else "All ${nf.format(s.selectedIndexed)} selected photos are ready to search",
+                "Setup paused · ${nf.format(pending)} photos left",
                 color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.weight(1f),
             )
-            if (pending > 0) TextButton(onClick = vm::startIndexing) { Text("Continue") }
+            TextButton(onClick = vm::startIndexing) { Text("Continue") }
         }
+        else -> Text(
+            "All set · new photos are added automatically",
+            color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall,
+            modifier = modifier,
+        )
     }
     if (!s.fullAccess) {
         Row(modifier, verticalAlignment = Alignment.CenterVertically) {
@@ -898,15 +892,11 @@ private fun SettingsSheet(s: UiState, vm: MainViewModel) {
             Spacer(Modifier.height(20.dp))
             Text("How far back", fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(8.dp))
-            val ranges = listOf(DateRange.ALL, DateRange.Y5, DateRange.Y3, DateRange.Y1)
-            SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                ranges.forEachIndexed { i, r ->
-                    SegmentedButton(
-                        selected = s.dateRange == r, onClick = { vm.setDateRange(r) },
-                        shape = SegmentedButtonDefaults.itemShape(i, ranges.size),
-                    ) { Text(if (r == DateRange.ALL) "All" else r.label, maxLines = 1) }
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    DateRange.choices.forEach { r ->
+                        FilterChip(selected = s.dateRange == r, onClick = { vm.setDateRange(r) }, label = { Text(r.label) })
+                    }
                 }
-            }
             Spacer(Modifier.height(16.dp))
             SettingSwitch("Oldest photos first", "Off: your newest photos are ready first.", s.oldestFirst, vm::setOldestFirst)
             SettingSwitch("Only while charging", "Saves battery. Preparing takes longer overall.", s.chargingOnly, vm::setChargingOnly)

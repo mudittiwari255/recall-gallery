@@ -33,6 +33,7 @@ object Work {
     const val DOWNLOAD = "model-download"
     const val INDEX = "photo-index"
     const val INDEX_PERIODIC = "photo-index-periodic"
+    const val WATCH = "new-photo-watch"
     private const val CHANNEL = "background"
 
     fun startDownload(context: Context) {
@@ -59,6 +60,25 @@ object Work {
 
     fun stopIndexing(context: Context) {
         WorkManager.getInstance(context).cancelUniqueWork(INDEX)
+    }
+
+    /**
+     * Wakes up when photos are added to the phone (even with Recall closed) and prepares them. Android delivers
+     * the trigger once, so the watcher re-arms itself each time it fires.
+     */
+    fun watchNewPhotos(context: Context, rearm: Boolean = false) {
+        val req = OneTimeWorkRequestBuilder<NewPhotoWorker>()
+            .setConstraints(
+                Constraints.Builder()
+                    .addContentUriTrigger(android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, true)
+                    .setTriggerContentUpdateDelay(15, TimeUnit.SECONDS)
+                    .setTriggerContentMaxDelay(2, TimeUnit.MINUTES)
+                    .build(),
+            )
+            .build()
+        WorkManager.getInstance(context).enqueueUniqueWork(
+            WATCH, if (rearm) ExistingWorkPolicy.APPEND_OR_REPLACE else ExistingWorkPolicy.KEEP, req,
+        )
     }
 
     /**
@@ -104,6 +124,16 @@ fun formatEta(seconds: Long): String = when {
     else -> "about ${seconds / 3600} h ${(seconds % 3600) / 60} m"
 }
 
+/** Fires when new photos appear: starts the single indexing job and listens again. */
+class NewPhotoWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
+    override suspend fun doWork(): Result {
+        val app = applicationContext as RecallApp
+        if (app.models.isReady && app.settings.onboardingDone) Work.startIndexing(applicationContext)
+        Work.watchNewPhotos(applicationContext, rearm = true)
+        return Result.success()
+    }
+}
+
 /** Started by the periodic schedule; hands off to the single indexing job. */
 class IndexKickWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
@@ -138,6 +168,7 @@ class DownloadWorker(context: Context, params: WorkerParameters) : CoroutineWork
             }
             Work.startIndexing(applicationContext)
             Work.schedulePeriodic(applicationContext)
+            Work.watchNewPhotos(applicationContext)
             Result.success()
         } catch (e: Exception) {
             if (isStopped) Result.failure() else Result.retry()
@@ -172,7 +203,7 @@ fun burstGroups(photos: List<Photo>): List<List<Photo>> {
  * Embeds every selected photo that is new or changed.
  *
  * Decoding and preparing photos runs on two IO threads ahead of the model, so the model never waits on storage.
- * Burst shots share one embedding. Progress reports `done`, `total`, `msPerPhoto` (over roughly the last 30 photos)
+ * Burst shots share one embedding. Progress reports `done`, `total`, `msPerPhoto` (over roughly the last 100 photos)
  * and `etaSec`.
  */
 class IndexWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
@@ -223,7 +254,7 @@ class IndexWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
         suspend fun report() {
             val now = System.nanoTime()
             samples.addLast(now to done)
-            while (samples.size > 2 && done - samples.first().second > 30) samples.removeFirst()
+            while (samples.size > 2 && done - samples.first().second > 100) samples.removeFirst()
             val (t0, d0) = samples.first()
             val msPer = if (done > d0) (now - t0) / 1_000_000 / (done - d0) else 0L
             val eta = msPer * (total - done) / 1000

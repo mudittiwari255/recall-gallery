@@ -34,6 +34,8 @@ import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.FilterChip
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -288,7 +290,7 @@ private fun FoldersStep(s: UiState, vm: MainViewModel) {
                     Column(Modifier.padding(16.dp)) {
                         Text("${count.format(s.selectedCount)} photos selected", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onPrimaryContainer)
                         Text(
-                            "Ready in ${friendlyDuration(s.selectedCount * perPhotoMs / 1000)}, roughly. It keeps going in the background, and search works on photos as soon as they're ready.",
+                            "One-time setup: ${friendlyDuration(s.selectedCount * perPhotoMs / 1000)}, roughly. After that, new photos are added automatically.",
                             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onPrimaryContainer,
                         )
                     }
@@ -296,13 +298,9 @@ private fun FoldersStep(s: UiState, vm: MainViewModel) {
                 Spacer(Modifier.height(20.dp))
                 Text("How far back", fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(8.dp))
-                val ranges = listOf(DateRange.ALL, DateRange.Y5, DateRange.Y3, DateRange.Y1)
-                SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                    ranges.forEachIndexed { i, r ->
-                        SegmentedButton(
-                            selected = s.dateRange == r, onClick = { vm.setDateRange(r) },
-                            shape = SegmentedButtonDefaults.itemShape(i, ranges.size),
-                        ) { Text(if (r == DateRange.ALL) "All" else r.label, maxLines = 1) }
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    DateRange.choices.forEach { r ->
+                        FilterChip(selected = s.dateRange == r, onClick = { vm.setDateRange(r) }, label = { Text(r.label) })
                     }
                 }
                 Spacer(Modifier.height(20.dp))
@@ -352,7 +350,7 @@ private fun DownloadStep(s: UiState, vm: MainViewModel) {
         onSecondary = { vm.finishOnboarding(download = false) },
     ) {
         PromiseRow(Icons.Filled.Info, "About 285 MB, once", "Use Wi-Fi if you can. It downloads in the background, so you can keep using your phone.")
-        PromiseRow(Icons.Filled.Search, "Then Recall prepares your photos", "It looks at each selected photo once. Search works on photos as soon as they're ready.")
+        PromiseRow(Icons.Filled.Search, "Then a one-time setup", "Recall looks at each photo once. Search works as photos get ready, and new photos are added automatically after that.")
         PromiseRow(Icons.Filled.Lock, "Still private", "The download is the only time Recall uses the internet. Nothing about your photos is sent.")
         Spacer(Modifier.height(8.dp))
         Text(
