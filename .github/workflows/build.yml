@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  GRADLE_VERSION: "8.11.1"
+  GRADLE_VERSION: "8.13"
   MODEL_REPO: onnx-community/embeddinggemma-2-ONNX
 
 jobs:
@@ -103,9 +103,61 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: bash .github/publish-logs.sh ci-logs-apk
 
+  play:
+    name: Build Play Store bundle
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      HAS_UPLOAD_KEY: ${{ secrets.UPLOAD_KEY_PASSWORD != '' }}
+      HAS_PLAY_ACCESS: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON != '' }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: No upload key yet
+        if: env.HAS_UPLOAD_KEY != 'true'
+        run: echo "::notice::Add the UPLOAD_KEY_PASSWORD secret to build the Play Store bundle (see PLAY_STORE.md)."
+      - uses: actions/setup-java@v6
+        if: env.HAS_UPLOAD_KEY == 'true'
+        with: { distribution: temurin, java-version: "17" }
+      - uses: gradle/actions/setup-gradle@v6
+        if: env.HAS_UPLOAD_KEY == 'true'
+        with: { gradle-version: "${{ env.GRADLE_VERSION }}" }
+      - name: Bundle (signed with the upload key)
+        if: env.HAS_UPLOAD_KEY == 'true'
+        env:
+          UPLOAD_KEYSTORE_PASSWORD: ${{ secrets.UPLOAD_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          mkdir -p logs
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 -in keystore/upload.jks.enc \
+            -out "$RUNNER_TEMP/upload.jks" -pass env:UPLOAD_KEYSTORE_PASSWORD
+          export UPLOAD_KEYSTORE_FILE="$RUNNER_TEMP/upload.jks"
+          gradle :app:bundleRelease --no-daemon --stacktrace 2>&1 | tee logs/bundle.log
+          cp app/build/outputs/bundle/release/app-release.aab recall-gallery.aab
+          rm -f "$RUNNER_TEMP/upload.jks"
+      - uses: actions/upload-artifact@v7
+        if: env.HAS_UPLOAD_KEY == 'true'
+        with:
+          name: recall-gallery-aab
+          path: recall-gallery.aab
+      - name: Upload to Play (internal testing)
+        if: env.HAS_UPLOAD_KEY == 'true' && env.HAS_PLAY_ACCESS == 'true'
+        uses: r0adkll/upload-google-play@v1.1.5
+        with:
+          serviceAccountJsonPlainText: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          packageName: com.prasanglabs.recall
+          releaseFiles: recall-gallery.aab
+          track: internal
+          # "draft" until the app has been published once; then set the PLAY_RELEASE_STATUS variable to "completed"
+          status: ${{ vars.PLAY_RELEASE_STATUS || 'draft' }}
+      - name: Publish logs
+        if: always()
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: bash .github/publish-logs.sh ci-logs-play
+
   release:
     name: Publish release
-    needs: [parity, apk]
+    needs: [parity, apk, play]
     runs-on: ubuntu-24.04
     steps:
       - name: Create release
@@ -113,9 +165,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh run download "${{ github.run_id }}" --repo "${{ github.repository }}" --name recall-gallery-apk
+          files="recall-gallery.apk"
+          if gh run download "${{ github.run_id }}" --repo "${{ github.repository }}" --name recall-gallery-aab; then
+            files="$files recall-gallery.aab"
+          fi
           tag="build-${{ github.run_number }}"
-          gh release create "$tag" recall-gallery.apk \
+          gh release create "$tag" $files \
             --repo "${{ github.repository }}" \
             --title "Recall Gallery (build ${{ github.run_number }})" \
-            --notes "Install: open this page on your Android phone, tap recall-gallery.apk, then allow installing from your browser. Built from ${{ github.sha }}." \
+            --notes "Install on your phone: tap recall-gallery.apk, then allow installing from your browser. recall-gallery.aab (when present) is for uploading to Google Play, not for installing. Built from ${{ github.sha }}." \
             --latest

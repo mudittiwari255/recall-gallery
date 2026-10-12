@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Recall Gallery Privacy Policy</title>
+<style>
+  :root { --bg:#f7f7fa; --fg:#1b1e2e; --muted:#5b6077; --accent:#9a6410; --line:#d6d9e4; color-scheme: light dark; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#12141d; --fg:#e9eaf2; --muted:#9a9eb4; --accent:#f2b33d; --line:#30344a; } }
+  body { margin:0; background:var(--bg); color:var(--fg); font:17px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width:44rem; margin:0 auto; padding:2.5rem 1.25rem 4rem; }
+  h1 { font-size:2rem; line-height:1.2; margin:0 0 .25rem; }
+  h2 { font-size:1.15rem; margin:2rem 0 .5rem; }
+  p, li { color:var(--fg); }
+  .meta { color:var(--muted); margin:0 0 2rem; }
+  .summary { border-left:4px solid var(--accent); padding:.25rem 0 .25rem 1rem; margin:1.5rem 0; }
+  a { color:var(--accent); }
+  ul { padding-left:1.25rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Recall Gallery Privacy Policy</h1>
+  <p class="meta">Prasang Labs · App ID com.prasanglabs.recall · Effective 12 October 2026</p>
+
+  <p class="summary"><strong>In short:</strong> Recall looks at your photos only on your phone. It does not upload your photos or anything about them, has no accounts, no ads and no analytics, and does not share data with anyone.</p>
+
+  <h2>What Recall does with your photos</h2>
+  <p>Recall reads the photos on your device so it can show them and let you search them by description. To do this it runs an AI model (EmbeddingGemma 2 by Google) on your phone, which turns each photo into a list of numbers that describes its content. These numbers, along with each photo's identifier and date, are stored in Recall's private storage on your device. They never leave your device.</p>
+  <p>Recall cannot edit, move, delete or upload your photos.</p>
+
+  <h2>What Recall sends over the internet</h2>
+  <p>Only one thing: when you choose to download the search engine, Recall downloads the model files (about 285 MB) from Hugging Face (huggingface.co), where Google publishes the model. Like any download, this request reveals your device's IP address to Hugging Face and its content-delivery network, under <a href="https://huggingface.co/privacy">Hugging Face's privacy policy</a>. No photos, search terms or personal information are sent.</p>
+  <p>Searches, filters and results are processed entirely on your device.</p>
+
+  <h2>Data we collect</h2>
+  <p>None. Recall has no servers, accounts, advertising, analytics or crash reporting. Prasang Labs never receives your photos, your searches or information about how you use the app.</p>
+
+  <h2>Permissions</h2>
+  <ul>
+    <li><strong>Photos and videos (images only):</strong> to show your gallery and prepare photos for search. On Android 14 and later you can allow only selected photos.</li>
+    <li><strong>Notifications (optional):</strong> to show progress while photos are prepared in the background.</li>
+    <li><strong>Internet:</strong> only to download the search engine.</li>
+    <li><strong>Run in the background:</strong> to continue preparing photos when the app is closed.</li>
+  </ul>
+
+  <h2>Deleting your data</h2>
+  <p>In Recall, open Settings and tap <em>Remove search engine and index</em> to delete the model and everything Recall stored. Uninstalling the app also deletes all of it. Your photos are not affected either way.</p>
+
+  <h2>Children</h2>
+  <p>Recall is not directed at children and collects no personal information from anyone.</p>
+
+  <h2>Changes</h2>
+  <p>If this policy changes, the new version will be posted on this page with a new effective date.</p>
+
+  <h2>Contact</h2>
+  <p>Questions: open an issue at <a href="https://github.com/mudittiwari255/recall-gallery/issues">github.com/mudittiwari255/recall-gallery/issues</a>.</p>
+</main>
+</body>
+</html>

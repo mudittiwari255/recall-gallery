@@ -1,0 +1,23 @@
+Can't find that one photo? Just describe it.
+
+Type "bill from the restaurant", "dog on the beach 2023" or "whiteboard notes last month", and Recall finds the photo, even if it has no name, tags or location. Works in English, Hindi and 100+ other languages.
+
+PRIVATE BY DESIGN
+• Your photos never leave your phone. Nothing is uploaded. No account, no cloud.
+• The internet is used for one thing only: downloading Recall's search engine once (about 285 MB). After that, search works even in airplane mode.
+• No ads, no tracking, no analytics.
+• Remove the search engine and everything Recall learned with one tap. Your photos are never changed.
+
+WHAT YOU CAN DO
+• Search by meaning: objects, places, people's activities, documents, screenshots, text in photos.
+• Search with dates: "beach 2023", "receipts last month", "December".
+• Find similar photos: open any photo and tap Find similar.
+• Filter by year, folder, camera photos or screenshots, shape, and favourites.
+• Choose which folders and how far back Recall should look.
+
+HOW IT WORKS
+Recall uses EmbeddingGemma 2, an open AI model from Google, running entirely on your phone. The first time, Recall looks at each of your photos once (a one-time setup that continues in the background; plugging in your charger makes it faster). New photos are added automatically after that.
+
+PERMISSIONS
+• Photos: to show your gallery and understand what's in each photo. Recall can only look; it can't edit, delete or upload your photos.
+• Notifications (optional): to show progress during the one-time setup.

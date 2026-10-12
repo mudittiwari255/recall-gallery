@@ -6,32 +6,43 @@ plugins {
 
 android {
     namespace = "app.recall"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
-        applicationId = "app.recall.gallery"
+        applicationId = "com.prasanglabs.recall"
         minSdk = 29
-        targetSdk = 35
+        targetSdk = 36
         versionCode = (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInt()
         versionName = "0.1.${System.getenv("GITHUB_RUN_NUMBER") ?: "0"}"
         ndk { abiFilters += listOf("arm64-v8a") }
     }
 
+    // The Play upload key lives only in GitHub secrets; CI passes it in for Play builds (see build.yml).
+    val uploadStore = System.getenv("UPLOAD_KEYSTORE_FILE")?.takeIf { file(it).exists() }
+
     signingConfigs {
-        // A fixed key kept in the repo so every CI build can update the previous install.
-        // Fine for a personal sideloaded app; use a secret keystore before publishing to the Play Store.
+        // Sideload builds (GitHub releases): a fixed key kept in the repo so each build updates the last one.
+        // It is public, so it is never used for the Play Store.
         create("shared") {
             storeFile = rootProject.file("keystore/recall.jks")
             storePassword = "recall-gallery"
             keyAlias = "recall"
             keyPassword = "recall-gallery"
         }
+        if (uploadStore != null) {
+            create("upload") {
+                storeFile = file(uploadStore)
+                storePassword = System.getenv("UPLOAD_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("UPLOAD_KEY_ALIAS") ?: "upload"
+                keyPassword = System.getenv("UPLOAD_KEY_PASSWORD") ?: System.getenv("UPLOAD_KEYSTORE_PASSWORD")
+            }
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("shared")
+            signingConfig = signingConfigs.getByName(if (uploadStore != null) "upload" else "shared")
         }
         debug {
             signingConfig = signingConfigs.getByName("shared")
