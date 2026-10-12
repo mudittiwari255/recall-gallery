@@ -61,15 +61,26 @@ jobs:
       - name: Reference outputs (Transformers.js)
         working-directory: tools/reference
         run: |
+          set -o pipefail
+          mkdir -p "$GITHUB_WORKSPACE/logs"
           npm install --no-audit --no-fund
           node reference.mjs "$GITHUB_WORKSPACE/models" "$GITHUB_WORKSPACE/reference.json" \
-            "$GITHUB_WORKSPACE/testimg/cats.jpg" "$GITHUB_WORKSPACE/testimg/portrait.png"
+            "$GITHUB_WORKSPACE/testimg/cats.jpg" "$GITHUB_WORKSPACE/testimg/portrait.png" 2>&1 | tee "$GITHUB_WORKSPACE/logs/reference.log"
 
       - name: Kotlin engine vs reference
         env:
           MODEL_DIR: ${{ github.workspace }}/models/${{ env.MODEL_REPO }}
           REFERENCE_JSON: ${{ github.workspace }}/reference.json
-        run: gradle :core:test --no-daemon --stacktrace
+        run: |
+          set -o pipefail
+          mkdir -p logs
+          gradle :core:test --no-daemon --stacktrace 2>&1 | tee logs/core-test.log
+
+      - name: Publish logs
+        if: always()
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: bash .github/publish-logs.sh ci-logs-parity
 
   apk:
     name: Build APK
@@ -82,13 +93,21 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with: { gradle-version: "${{ env.GRADLE_VERSION }}" }
       - name: Assemble
-        run: gradle :app:assembleRelease --no-daemon --stacktrace
+        run: |
+          set -o pipefail
+          mkdir -p logs
+          gradle :app:assembleRelease --no-daemon --stacktrace 2>&1 | tee logs/assemble.log
       - name: Rename
         run: cp app/build/outputs/apk/release/app-release.apk recall-gallery.apk
       - uses: actions/upload-artifact@v4
         with:
           name: recall-gallery-apk
           path: recall-gallery.apk
+      - name: Publish logs
+        if: always()
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: bash .github/publish-logs.sh ci-logs-apk
 
   release:
     name: Publish release
