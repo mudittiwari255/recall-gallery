@@ -19,22 +19,16 @@ env:
 jobs:
   parity:
     name: Check search engine against reference
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
         with: { distribution: temurin, java-version: "17" }
-      - uses: actions/setup-node@v4
-        with: { node-version: "20" }
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: actions/setup-node@v7
+        with: { node-version: "22" }
+      - uses: gradle/actions/setup-gradle@v6
         with: { gradle-version: "${{ env.GRADLE_VERSION }}" }
-
-      - name: Cache model
-        uses: actions/cache@v4
-        with:
-          path: models
-          key: model-q4-v1
 
       - name: Download model
         run: |
@@ -84,13 +78,13 @@ jobs:
 
   apk:
     name: Build APK
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
         with: { distribution: temurin, java-version: "17" }
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
         with: { gradle-version: "${{ env.GRADLE_VERSION }}" }
       - name: Assemble
         run: |
@@ -99,7 +93,7 @@ jobs:
           gradle :app:assembleRelease --no-daemon --stacktrace 2>&1 | tee logs/assemble.log
       - name: Rename
         run: cp app/build/outputs/apk/release/app-release.apk recall-gallery.apk
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: recall-gallery-apk
           path: recall-gallery.apk
@@ -112,14 +106,13 @@ jobs:
   release:
     name: Publish release
     needs: [parity, apk]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/download-artifact@v4
-        with: { name: recall-gallery-apk }
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          gh run download "${{ github.run_id }}" --repo "${{ github.repository }}" --name recall-gallery-apk
           tag="build-${{ github.run_number }}"
           gh release create "$tag" recall-gallery.apk \
             --repo "${{ github.repository }}" \

@@ -41,7 +41,7 @@ data class UiState(
     val searchMillis: Long = 0,
     val message: String? = null,
     val viewing: Photo? = null,
-    val photoDetail: Int = 140,
+    val photoDetail: Int = 70,
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {

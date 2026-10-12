@@ -40,6 +40,6 @@ class Settings(context: Context) {
 
     /** Vision token budget per photo: 70 fast, 140 balanced, 280 detailed. */
     var photoDetail: Int
-        get() = prefs.getInt("photo_detail", 140)
+        get() = prefs.getInt("photo_detail", 70)
         set(value) = prefs.edit().putInt("photo_detail", value).apply()
 }
