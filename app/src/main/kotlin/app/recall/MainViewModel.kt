@@ -33,6 +33,7 @@ data class UiState(
     /** Photos that can be found by search right now. */
     val indexedIds: Set<Long> = emptySet(),
     val preparingPhoto: Boolean = false,
+    val thermal: Int = 0,
     // welcome flow: 0 welcome, 1 privacy, 2 permissions, 3 folders, 4 download; null when finished
     val onboardingStep: Int? = 0,
     val permissionDenied: Boolean = false,
@@ -114,6 +115,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         if (_state.value.onboardingStep == null) settings.onboardingDone = true
+        // Older builds scheduled a second indexing job that could run alongside the main one; replace it once
+        if (app.models.isReady && !settings.periodicV2) {
+            Work.schedulePeriodic(app, replace = true)
+            settings.periodicV2 = true
+        }
         app.contentResolver.registerContentObserver(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, true, observer)
         viewModelScope.launch {
             work.getWorkInfosForUniqueWorkFlow(Work.DOWNLOAD).collect { infos ->
@@ -133,11 +139,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             work.getWorkInfosForUniqueWorkFlow(Work.INDEX).collect { infos -> onIndexInfo(infos.firstOrNull()) }
         }
-        viewModelScope.launch {
-            work.getWorkInfosForUniqueWorkFlow(Work.INDEX_PERIODIC).collect { infos ->
-                infos.firstOrNull()?.takeIf { it.state == WorkInfo.State.RUNNING }?.let(::onIndexInfo)
-            }
-        }
     }
 
     private fun onIndexInfo(info: WorkInfo?) {
@@ -150,6 +151,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 indexTotal = p?.getInt("total", it.indexTotal) ?: it.indexTotal,
                 msPerPhoto = p?.getLong("msPerPhoto", 0L)?.takeIf { v -> v > 0 } ?: it.msPerPhoto,
                 etaSec = p?.getLong("etaSec", it.etaSec) ?: it.etaSec,
+                thermal = if (running) app.thermalStatus() else 0,
             )
         }
         val now = System.currentTimeMillis()
@@ -374,7 +376,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _state.update { it.copy(searching = true) }
             try {
                 val t0 = System.currentTimeMillis()
-                val qv = withContext(Dispatchers.Default) { app.models.embedder().embedQuery(parsed.text) }
+                app.searchBusyUntil = System.currentTimeMillis() + 5000
+                val qv = try {
+                    withContext(Dispatchers.Default) { app.models.embedder().embedQuery(parsed.text) }
+                } finally {
+                    app.searchBusyUntil = 0L
+                }
                 lastQueryVec = qv; lastExclude = null
                 showRanked(qv, null, "“${parsed.text}”")
                 _state.update { it.copy(searchMillis = System.currentTimeMillis() - t0) }
@@ -393,6 +400,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             if (vec == null) {
                 if (!app.models.isReady) { toast("Download the search engine first."); return@launch }
                 _state.update { it.copy(preparingPhoto = true) }
+                app.searchBusyUntil = System.currentTimeMillis() + 15000
                 vec = try {
                     withContext(Dispatchers.Default) {
                         val budget = settings.photoDetail
@@ -403,6 +411,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 } catch (e: Throwable) {
                     null
                 } finally {
+                    app.searchBusyUntil = 0L
                     _state.update { it.copy(preparingPhoto = false) }
                 }
                 if (vec == null) { toast("Couldn't read this photo."); return@launch }

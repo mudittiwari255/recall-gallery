@@ -14,6 +14,13 @@ class RecallApp : Application() {
     val media by lazy { MediaRepo(contentResolver) }
     val settings by lazy { Settings(this) }
 
+    /** Indexing pauses until this time, so a search runs at full speed. */
+    @Volatile var searchBusyUntil: Long = 0L
+
+    /** Android's heat level (PowerManager.THERMAL_STATUS_*); 2+ means the phone is being slowed down. */
+    fun thermalStatus(): Int =
+        runCatching { getSystemService(android.os.PowerManager::class.java).currentThermalStatus }.getOrDefault(0)
+
     /** Full or partial (Android 14 "selected photos") access both count. */
     fun hasPhotoPermission(): Boolean = photoPermissions().any {
         ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
@@ -85,6 +92,11 @@ class Settings(context: Context) {
     var oldestFirst: Boolean
         get() = prefs.getBoolean("oldest_first", false)
         set(value) = prefs.edit().putBoolean("oldest_first", value).apply()
+
+    /** Set once the periodic job has been switched to the single-runner version. */
+    var periodicV2: Boolean
+        get() = prefs.getBoolean("periodic_v2", false)
+        set(value) = prefs.edit().putBoolean("periodic_v2", value).apply()
 
     var onboardingDone: Boolean
         get() = prefs.getBoolean("onboarding_done", false)

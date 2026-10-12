@@ -22,6 +22,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancelChildren
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
@@ -60,12 +61,19 @@ object Work {
         WorkManager.getInstance(context).cancelUniqueWork(INDEX)
     }
 
-    /** Picks up new photos a few times a day while charging. */
-    fun schedulePeriodic(context: Context) {
-        val req = PeriodicWorkRequestBuilder<IndexWorker>(6, TimeUnit.HOURS)
+    /**
+     * Picks up new photos a few times a day while charging. The periodic job only *starts* the normal indexing job
+     * (which is unique), so there is never more than one indexing run at a time.
+     */
+    fun schedulePeriodic(context: Context, replace: Boolean = false) {
+        val req = PeriodicWorkRequestBuilder<IndexKickWorker>(6, TimeUnit.HOURS)
             .setConstraints(Constraints.Builder().setRequiresCharging(true).setRequiresBatteryNotLow(true).build())
             .build()
-        WorkManager.getInstance(context).enqueueUniquePeriodicWork(INDEX_PERIODIC, ExistingPeriodicWorkPolicy.KEEP, req)
+        WorkManager.getInstance(context).enqueueUniquePeriodicWork(
+            INDEX_PERIODIC,
+            if (replace) ExistingPeriodicWorkPolicy.CANCEL_AND_REENQUEUE else ExistingPeriodicWorkPolicy.KEEP,
+            req,
+        )
     }
 
     fun foregroundInfo(context: Context, id: Int, title: String, text: String, progress: Int, max: Int): ForegroundInfo {
@@ -94,6 +102,14 @@ fun formatEta(seconds: Long): String = when {
     seconds < 60 -> "under a minute"
     seconds < 3600 -> "about ${seconds / 60} m"
     else -> "about ${seconds / 3600} h ${(seconds % 3600) / 60} m"
+}
+
+/** Started by the periodic schedule; hands off to the single indexing job. */
+class IndexKickWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
+    override suspend fun doWork(): Result {
+        Work.startIndexing(applicationContext)
+        return Result.success()
+    }
 }
 
 class DownloadWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
@@ -165,7 +181,23 @@ class IndexWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
 
     private class Prepared(val group: List<Photo>, val inputs: VisionInputs?)
 
-    override suspend fun doWork(): Result = withContext(Dispatchers.Default) {
+    companion object {
+        /** Belt and braces: never run two indexing jobs in one process, whatever scheduled them. */
+        private val running = java.util.concurrent.atomic.AtomicBoolean(false)
+    }
+
+    override suspend fun doWork(): Result {
+        // A restart (new settings) can arrive while the previous run is still winding down: wait for it briefly
+        var acquired = false
+        for (i in 0 until 150) {
+            if (running.compareAndSet(false, true)) { acquired = true; break }
+            delay(100)
+        }
+        if (!acquired) return Result.retry()
+        return try { index() } finally { running.set(false) }
+    }
+
+    private suspend fun index(): Result = withContext(Dispatchers.Default) {
         val app = applicationContext as RecallApp
         if (!app.models.isReady || !app.hasPhotoPermission()) return@withContext Result.success()
         runCatching { setForeground(getForegroundInfo()) }
@@ -233,6 +265,8 @@ class IndexWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
             var sinceReport = 0
             for (first in queue) {
                 if (isStopped) break
+                // Step aside while the user is searching, so the search gets the whole CPU
+                while (System.currentTimeMillis() < app.searchBusyUntil && !isStopped) delay(100)
                 // Take whatever else is already prepared, up to the batch size
                 val batch = mutableListOf(first)
                 while (batch.size < VISION_BATCH) batch.add(queue.tryReceive().getOrNull() ?: break)

@@ -444,6 +444,14 @@ private fun StatusStrip(s: UiState, vm: MainViewModel, askPermission: () -> Unit
             if (s.indexTotal > 0) LinearProgressIndicator(progress = { s.indexDone.toFloat() / s.indexTotal }, modifier = Modifier.fillMaxWidth())
             else LinearProgressIndicator(Modifier.fillMaxWidth())
             Spacer(Modifier.height(6.dp))
+            if (s.thermal >= 2) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "Your phone is warm, so Android is slowing Recall down to cool it. It speeds up again once the phone cools; " +
+                        "a cool place and taking it out of its case help.",
+                    color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.labelSmall,
+                )
+            }
             Text(
                 "Search already works on the photos that are ready." +
                     if (s.msPerPhoto > 0) " (%.1f seconds per photo)".format(s.msPerPhoto / 1000.0) else "",

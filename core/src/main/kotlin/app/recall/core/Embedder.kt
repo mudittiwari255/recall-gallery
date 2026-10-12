@@ -32,8 +32,10 @@ class Embedder(
 
     private val textSession: OrtSession by lazy { open("model_$dtype.onnx") }
     private val visionSession: OrtSession by lazy { open("vision_encoder_$dtype.onnx") }
-    // Fair, so a search waiting behind background indexing gets the next turn instead of starving
-    private val lock = ReentrantLock(true)
+    // Separate locks for the two models: a search needs only the text model, so it no longer waits for the
+    // vision encoder to finish the photo being indexed. Fair, so a waiting search gets the next turn.
+    private val textLock = ReentrantLock(true)
+    private val visionLock = ReentrantLock(true)
 
     private fun open(name: String): OrtSession {
         val opts = OrtSession.SessionOptions().apply {
@@ -51,7 +53,7 @@ class Embedder(
 
     fun embedDocument(text: String, title: String = "none"): FloatArray = embedText("title: $title | text: $text")
 
-    fun embedText(text: String): FloatArray = lock.withLock {
+    fun embedText(text: String): FloatArray = textLock.withLock {
         val ids = tokenizer.encode(text)
         runText(ids, null)
     }
@@ -74,7 +76,7 @@ class Embedder(
      * Embeds several prepared images, running the vision encoder once for the whole batch (the text model still runs
      * per image). All images must share the same token budget.
      */
-    fun embedPreparedBatch(batch: List<VisionInputs>): List<FloatArray> = lock.withLock {
+    fun embedPreparedBatch(batch: List<VisionInputs>): List<FloatArray> {
         require(batch.isNotEmpty())
         val maxPatches = batch[0].maxPatches
         val patchDim = batch[0].patchDim
@@ -86,7 +88,7 @@ class Embedder(
             System.arraycopy(v.pixelValues, 0, pixelData, i * maxPatches * patchDim, maxPatches * patchDim)
             System.arraycopy(v.positionIds, 0, posData, i * maxPatches * 2, maxPatches * 2)
         }
-        val features = OnnxTensor.createTensor(
+        val features = visionLock.withLock { OnnxTensor.createTensor(
             env, FloatBuffer.wrap(pixelData), longArrayOf(b.toLong(), maxPatches.toLong(), patchDim.toLong()),
         ).use { pixels ->
             OnnxTensor.createTensor(env, LongBuffer.wrap(posData), longArrayOf(b.toLong(), maxPatches.toLong(), 2)).use { pos ->
@@ -104,18 +106,19 @@ class Embedder(
                     FloatArray(buf.remaining()).also { buf.get(it) }
                 }
             }
-        }
+        } }
         // Soft tokens come back flattened across the batch, in order
         val total = batch.sumOf { it.numSoftTokens }
         check(features.size == total * hiddenSize) {
             "Vision encoder returned ${features.size / hiddenSize} soft tokens, expected $total"
         }
         var offset = 0
-        batch.map { v ->
+        return batch.map { v ->
             val n = v.numSoftTokens
             val mine = features.copyOfRange(offset * hiddenSize, (offset + n) * hiddenSize)
             offset += n
-            runText(imageIdsCache.getOrPut(n) { imageTokenIds(n) }, mine)
+            val ids = synchronized(imageIdsCache) { imageIdsCache.getOrPut(n) { imageTokenIds(n) } }
+            textLock.withLock { runText(ids, mine) }
         }
     }
 
@@ -151,9 +154,11 @@ class Embedder(
     }
 
     override fun close() {
-        lock.withLock {
-            runCatching { textSession.close() }
-            runCatching { visionSession.close() }
+        textLock.withLock {
+            visionLock.withLock {
+                runCatching { textSession.close() }
+                runCatching { visionSession.close() }
+            }
         }
     }
 
