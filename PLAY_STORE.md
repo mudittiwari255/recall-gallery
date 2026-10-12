@@ -13,6 +13,7 @@ Everything in the repo is ready; the steps below are the parts only you can do i
    - Value: the password in the `README-UPLOAD-KEY.txt` file you were given.
 
    The next push builds `recall-gallery.aab`, signed with your upload key, and attaches it to the GitHub release.
+4. **Publish the privacy policy page**: repo → **Settings → Pages** → *Build and deployment* → Source **Deploy from a branch** → Branch **main**, folder **/docs** → Save. After a minute it's live at `https://mudittiwari255.github.io/recall-gallery/privacy-policy.html`.
 
 ## 2. Create the app in Play Console
 
