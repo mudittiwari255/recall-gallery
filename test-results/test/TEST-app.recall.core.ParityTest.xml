@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="app.recall.core.ParityTest" tests="5" skipped="0" failures="0" errors="0" timestamp="2026-10-12T18:17:39.722Z" hostname="runnervmmprz5" time="33.911">
+  <properties/>
+  <testcase name="textEmbeddingsMatch" classname="app.recall.core.ParityTest" time="0.642"/>
+  <testcase name="batchedVisionMatchesSingleAndReportsSpeed" classname="app.recall.core.ParityTest" time="14.733"/>
+  <testcase name="searchRanksTheRightImage" classname="app.recall.core.ParityTest" time="0.106"/>
+  <testcase name="textTokenIdsMatch" classname="app.recall.core.ParityTest" time="0.01"/>
+  <testcase name="imagePreprocessingAndEmbeddingsMatch" classname="app.recall.core.ParityTest" time="18.414"/>
+  <system-out><![CDATA[Tokenizer loaded in 913 ms
+normalizer={"type":"Replace","pattern":{"String":" "},"content":"▁"}
+pre_tokenizer={"type":"Split","pattern":{"String":" "},"behavior":"MergedWithPrevious","invert":false}
+post_processor={"type":"TemplateProcessing","single":[{"SpecialToken":{"id":"<bos>","type_id":0}},{"Sequence":{"id":"A","type_id":0}},{"SpecialToken":{"id":"<eos>","type_id":0}}],"pair":[{"SpecialToken":{"id":"<bos>","type_id":0}},{"Sequence":{"id":"A","type_id":0}},{"SpecialToken":{"id":"<eos>","type_id":0}},{"SpecialToken":{"id":"<bos>","type_id":1}},{"Sequence":{"id":"B","type_id":1}},{"SpecialToken":{"id":"<eos>","type_id":1}}],"special_tokens":{"<bos>":{"id":"<bos>","ids":[2],"tokens":["<bos>"]},"<eos>":{"id":"<eos>","ids":[1],"tokens":["<eos>"]}}}
+byte_fallback=true ignore_merges=false unk=3 vocab=262144 added=24
+text cos=1.00000 (306 ms) task: search result | query: cats sleeping on a couch
+text cos=1.00000 (63 ms) task: search result | query: a turtle swimming in the ocean
+text cos=1.00000 (80 ms) task: search result | query: रेस्टोरेंट का बिल 2025 ✨ receipt
+text cos=1.00000 (61 ms) title: none | text: Hello   world!
+New line	tab  — naïve café
+text cos=1.00000 (79 ms) task: search result | query: 
+BENCH vision batch=4: one-by-one 6368 ms, batched 5982 ms, speedup 1.06x
+cats=0.749 turtle=0.524
+image /home/runner/work/recall-gallery/recall-gallery/testimg/cats.jpg budget=70 resized=432x336 mean=0.5186 ref=0.5186
+image cos=0.98766 (1560 ms)
+image /home/runner/work/recall-gallery/recall-gallery/testimg/cats.jpg budget=280 resized=912x672 mean=0.5186 ref=0.5185
+image cos=0.99918 (7533 ms)
+image /home/runner/work/recall-gallery/recall-gallery/testimg/portrait.png budget=70 resized=240x576 mean=0.5301 ref=0.5299
+image cos=0.99739 (1587 ms)
+image /home/runner/work/recall-gallery/recall-gallery/testimg/portrait.png budget=280 resized=528x1200 mean=0.5301 ref=0.5293
+image cos=0.99842 (7527 ms)
+]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

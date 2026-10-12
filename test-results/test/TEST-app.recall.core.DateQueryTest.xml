@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="app.recall.core.DateQueryTest" tests="15" skipped="0" failures="0" errors="0" timestamp="2026-10-12T18:17:38.639Z" hostname="runnervmmprz5" time="0.139">
+  <properties/>
+  <testcase name="yesterday" classname="app.recall.core.DateQueryTest" time="0.083"/>
+  <testcase name="lastYear" classname="app.recall.core.DateQueryTest" time="0.002"/>
+  <testcase name="bareMonthIsMostRecent" classname="app.recall.core.DateQueryTest" time="0.007"/>
+  <testcase name="monthYear" classname="app.recall.core.DateQueryTest" time="0.001"/>
+  <testcase name="lastNMonths" classname="app.recall.core.DateQueryTest" time="0.024"/>
+  <testcase name="inYear" classname="app.recall.core.DateQueryTest" time="0.002"/>
+  <testcase name="noDate" classname="app.recall.core.DateQueryTest" time="0.002"/>
+  <testcase name="mayIsAWordUnlessItLooksLikeAMonth" classname="app.recall.core.DateQueryTest" time="0.003"/>
+  <testcase name="shortMonthYear" classname="app.recall.core.DateQueryTest" time="0.001"/>
+  <testcase name="yearRange" classname="app.recall.core.DateQueryTest" time="0.004"/>
+  <testcase name="futureAndTinyNumbersAreNotYears" classname="app.recall.core.DateQueryTest" time="0.002"/>
+  <testcase name="year" classname="app.recall.core.DateQueryTest" time="0.001"/>
+  <testcase name="thisYearIsClampedToToday" classname="app.recall.core.DateQueryTest" time="0.001"/>
+  <testcase name="monthThisYear" classname="app.recall.core.DateQueryTest" time="0.001"/>
+  <testcase name="lastMonth" classname="app.recall.core.DateQueryTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

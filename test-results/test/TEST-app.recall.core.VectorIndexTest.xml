@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="app.recall.core.VectorIndexTest" tests="3" skipped="0" failures="0" errors="0" timestamp="2026-10-12T18:18:13.639Z" hostname="runnervmmprz5" time="0.38">
+  <properties/>
+  <testcase name="findsExactMatchFirstAndHandlesRemoval" classname="app.recall.core.VectorIndexTest" time="0.105"/>
+  <testcase name="filterRestrictsResults" classname="app.recall.core.VectorIndexTest" time="0.005"/>
+  <testcase name="twentyThousandPhotosSearchTiming" classname="app.recall.core.VectorIndexTest" time="0.269"/>
+  <system-out><![CDATA[20k x 768 search: 14.6 ms per query
+]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

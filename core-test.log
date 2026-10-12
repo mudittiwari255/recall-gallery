@@ -1,0 +1,99 @@
+To honour the JVM settings for this build a single-use Daemon process will be forked. For more on this, please refer to https://docs.gradle.org/8.13/userguide/gradle_daemon.html#sec:disabling_the_daemon in the Gradle documentation.
+Daemon will be stopped at the end of the build 
+> Task :core:checkKotlinGradlePluginConfigurationErrors SKIPPED
+> Task :core:processResources NO-SOURCE
+> Task :core:processTestResources NO-SOURCE
+> Task :core:compileKotlin
+> Task :core:compileJava NO-SOURCE
+> Task :core:classes UP-TO-DATE
+> Task :core:jar
+> Task :core:compileTestKotlin
+> Task :core:compileTestJava NO-SOURCE
+> Task :core:testClasses UP-TO-DATE
+[0;93m2026-10-12 18:17:38.988291617 [W:onnxruntime:ort-java, device_discovery.cc:146 GetPciBusId] Skipping pci_bus_id for PCI path at "/sys/devices/LNXSYSTM:00/LNXSYBUS:00/ACPI0004:00/MSFT1000:00/5620e0c7-8062-4dce-aeb7-520c7ef76171" because filename "5620e0c7-8062-4dce-aeb7-520c7ef76171" did not match expected pattern of [0-9a-f]+:[0-9a-f]+:[0-9a-f]+[.][0-9a-f]+[m
+
+> Task :core:test
+
+DateQueryTest > yesterday PASSED
+
+DateQueryTest > lastYear PASSED
+
+DateQueryTest > bareMonthIsMostRecent PASSED
+
+DateQueryTest > monthYear PASSED
+
+DateQueryTest > lastNMonths PASSED
+
+DateQueryTest > inYear PASSED
+
+DateQueryTest > noDate PASSED
+
+DateQueryTest > mayIsAWordUnlessItLooksLikeAMonth PASSED
+
+DateQueryTest > shortMonthYear PASSED
+
+DateQueryTest > yearRange PASSED
+
+DateQueryTest > futureAndTinyNumbersAreNotYears PASSED
+
+DateQueryTest > year PASSED
+
+DateQueryTest > thisYearIsClampedToToday PASSED
+
+DateQueryTest > monthThisYear PASSED
+
+DateQueryTest > lastMonth PASSED
+
+ParityTest STANDARD_OUT
+    Tokenizer loaded in 913 ms
+    normalizer={"type":"Replace","pattern":{"String":" "},"content":"▁"}
+    pre_tokenizer={"type":"Split","pattern":{"String":" "},"behavior":"MergedWithPrevious","invert":false}
+    post_processor={"type":"TemplateProcessing","single":[{"SpecialToken":{"id":"<bos>","type_id":0}},{"Sequence":{"id":"A","type_id":0}},{"SpecialToken":{"id":"<eos>","type_id":0}}],"pair":[{"SpecialToken":{"id":"<bos>","type_id":0}},{"Sequence":{"id":"A","type_id":0}},{"SpecialToken":{"id":"<eos>","type_id":0}},{"SpecialToken":{"id":"<bos>","type_id":1}},{"Sequence":{"id":"B","type_id":1}},{"SpecialToken":{"id":"<eos>","type_id":1}}],"special_tokens":{"<bos>":{"id":"<bos>","ids":[2],"tokens":["<bos>"]},"<eos>":{"id":"<eos>","ids":[1],"tokens":["<eos>"]}}}
+    byte_fallback=true ignore_merges=false unk=3 vocab=262144 added=24
+
+ParityTest > textEmbeddingsMatch STANDARD_OUT
+    text cos=1.00000 (306 ms) task: search result | query: cats sleeping on a couch
+    text cos=1.00000 (63 ms) task: search result | query: a turtle swimming in the ocean
+    text cos=1.00000 (80 ms) task: search result | query: रेस्टोरेंट का बिल 2025 ✨ receipt
+    text cos=1.00000 (61 ms) title: none | text: Hello   world!
+    New line	tab  — naïve café
+    text cos=1.00000 (79 ms) task: search result | query: 
+
+ParityTest > textEmbeddingsMatch PASSED
+
+ParityTest > batchedVisionMatchesSingleAndReportsSpeed STANDARD_OUT
+    BENCH vision batch=4: one-by-one 6368 ms, batched 5982 ms, speedup 1.06x
+
+ParityTest > batchedVisionMatchesSingleAndReportsSpeed PASSED
+
+ParityTest > searchRanksTheRightImage STANDARD_OUT
+    cats=0.749 turtle=0.524
+
+ParityTest > searchRanksTheRightImage PASSED
+
+ParityTest > textTokenIdsMatch PASSED
+
+ParityTest > imagePreprocessingAndEmbeddingsMatch STANDARD_OUT
+    image /home/runner/work/recall-gallery/recall-gallery/testimg/cats.jpg budget=70 resized=432x336 mean=0.5186 ref=0.5186
+    image cos=0.98766 (1560 ms)
+    image /home/runner/work/recall-gallery/recall-gallery/testimg/cats.jpg budget=280 resized=912x672 mean=0.5186 ref=0.5185
+    image cos=0.99918 (7533 ms)
+    image /home/runner/work/recall-gallery/recall-gallery/testimg/portrait.png budget=70 resized=240x576 mean=0.5301 ref=0.5299
+    image cos=0.99739 (1587 ms)
+    image /home/runner/work/recall-gallery/recall-gallery/testimg/portrait.png budget=280 resized=528x1200 mean=0.5301 ref=0.5293
+    image cos=0.99842 (7527 ms)
+
+ParityTest > imagePreprocessingAndEmbeddingsMatch PASSED
+
+VectorIndexTest > findsExactMatchFirstAndHandlesRemoval PASSED
+
+VectorIndexTest > filterRestrictsResults PASSED
+
+VectorIndexTest > twentyThousandPhotosSearchTiming STANDARD_OUT
+    20k x 768 search: 14.6 ms per query
+
+VectorIndexTest > twentyThousandPhotosSearchTiming PASSED
+gradle/actions: Writing build results to /home/runner/work/_temp/.gradle-actions/build-results/__run_4-1791829034095.json
+
+BUILD SUCCESSFUL in 1m 4s
+4 actionable tasks: 4 executed

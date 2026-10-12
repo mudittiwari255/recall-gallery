@@ -1,0 +1,9 @@
+normalizer: {"type":"Replace","pattern":{"String":" "},"content":"▁"}
+pre_tokenizer: {"type":"Split","pattern":{"String":" "},"behavior":"MergedWithPrevious","invert":false}
+post_processor: {"type":"TemplateProcessing","single":[{"SpecialToken":{"id":"<bos>","type_id":0}},{"Sequence":{"id":"A","type_id":0}},{"SpecialToken":{"id":"<eos>","type_id":0}}],"pair":[{"SpecialToken":{"id":"<bos>","type_id":0}},{"Sequence":{"id":"A","type_id":0}},{"SpecialToken":{"id":"<eos>","type_id":0}},{"SpecialToken":{"id":"<bos>","type_id":1}},{"Sequence":{"id":"B","type_id":1}},{"SpecialToken":{"id":"<eos>","type_id":1}}],"special_tokens":{"<bos>":{"id":"<bos>","ids":[2],"tokens":["<bos>"]},"<eos>":{"id":"<eos>","ids":[1],"tokens":["<eos>"]}}}
+model: {"type":"BPE","dropout":null,"unk_token":"<unk>","continuing_subword_prefix":null,"end_of_word_suffix":null,"fuse_unk":true,"byte_fallback":true,"ignore_merges":false} merges: 514906 first merge: ["\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n","\n"]
+/home/runner/work/recall-gallery/recall-gallery/testimg/cats.jpg budget=70: 63 soft tokens, 567 patches, mean=0.5186
+/home/runner/work/recall-gallery/recall-gallery/testimg/cats.jpg budget=280: 266 soft tokens, 2394 patches, mean=0.5185
+/home/runner/work/recall-gallery/recall-gallery/testimg/portrait.png budget=70: 60 soft tokens, 540 patches, mean=0.5299
+/home/runner/work/recall-gallery/recall-gallery/testimg/portrait.png budget=280: 275 soft tokens, 2475 patches, mean=0.5293
+wrote /home/runner/work/recall-gallery/recall-gallery/reference.json
