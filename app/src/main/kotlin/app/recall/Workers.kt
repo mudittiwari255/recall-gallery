@@ -101,8 +101,17 @@ object Work {
         if (nm.getNotificationChannel(CHANNEL) == null) {
             nm.createNotificationChannel(NotificationChannel(CHANNEL, "Background work", NotificationManager.IMPORTANCE_LOW))
         }
+        // Tapping the notification opens Recall like the launcher icon does (brings the existing screen to the front)
+        val open = context.packageManager.getLaunchIntentForPackage(context.packageName)
+            ?: android.content.Intent(context, MainActivity::class.java)
+        open.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+        val tap = android.app.PendingIntent.getActivity(
+            context, 0, open,
+            android.app.PendingIntent.FLAG_IMMUTABLE or android.app.PendingIntent.FLAG_UPDATE_CURRENT,
+        )
         val n = NotificationCompat.Builder(context, CHANNEL)
             .setSmallIcon(android.R.drawable.stat_sys_download)
+            .setContentIntent(tap)
             .setContentTitle(title)
             .setContentText(text)
             .setOnlyAlertOnce(true)
