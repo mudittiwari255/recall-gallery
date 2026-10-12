@@ -1,0 +1,109 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GRADLE_VERSION: "8.11.1"
+  MODEL_REPO: onnx-community/embeddinggemma-2-ONNX
+
+jobs:
+  parity:
+    name: Check search engine against reference
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "17" }
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
+      - uses: gradle/actions/setup-gradle@v4
+        with: { gradle-version: "${{ env.GRADLE_VERSION }}" }
+
+      - name: Cache model
+        uses: actions/cache@v4
+        with:
+          path: models
+          key: model-q4-v1
+
+      - name: Download model
+        run: |
+          set -euo pipefail
+          dir="models/$MODEL_REPO"
+          for f in config.json tokenizer.json tokenizer_config.json processor_config.json preprocessor_config.json \
+                   chat_template.jinja config_sentence_transformers.json \
+                   onnx/model_q4.onnx onnx/model_q4.onnx_data onnx/vision_encoder_q4.onnx onnx/vision_encoder_q4.onnx_data; do
+            if [ ! -s "$dir/$f" ]; then
+              mkdir -p "$(dirname "$dir/$f")"
+              curl -fsSL --retry 5 -o "$dir/$f" "https://huggingface.co/$MODEL_REPO/resolve/main/$f" || echo "skip $f"
+            fi
+          done
+          ls -la "$dir" "$dir/onnx"
+
+      - name: Test images
+        run: |
+          set -euo pipefail
+          mkdir -p testimg
+          curl -fsSL -o testimg/cats.jpg https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/cats.jpg
+          pip install --quiet pillow
+          python3 -c "from PIL import Image; im=Image.open('testimg/cats.jpg').convert('RGB'); w,h=im.size; im.crop((0,0,w//3,h)).save('testimg/portrait.png')"
+
+      - name: Reference outputs (Transformers.js)
+        working-directory: tools/reference
+        run: |
+          npm install --no-audit --no-fund
+          node reference.mjs "$GITHUB_WORKSPACE/models" "$GITHUB_WORKSPACE/reference.json" \
+            "$GITHUB_WORKSPACE/testimg/cats.jpg" "$GITHUB_WORKSPACE/testimg/portrait.png"
+
+      - name: Kotlin engine vs reference
+        env:
+          MODEL_DIR: ${{ github.workspace }}/models/${{ env.MODEL_REPO }}
+          REFERENCE_JSON: ${{ github.workspace }}/reference.json
+        run: gradle :core:test --no-daemon --stacktrace
+
+  apk:
+    name: Build APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "17" }
+      - uses: gradle/actions/setup-gradle@v4
+        with: { gradle-version: "${{ env.GRADLE_VERSION }}" }
+      - name: Assemble
+        run: gradle :app:assembleRelease --no-daemon --stacktrace
+      - name: Rename
+        run: cp app/build/outputs/apk/release/app-release.apk recall-gallery.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: recall-gallery-apk
+          path: recall-gallery.apk
+
+  release:
+    name: Publish release
+    needs: [parity, apk]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: recall-gallery-apk }
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="build-${{ github.run_number }}"
+          gh release create "$tag" recall-gallery.apk \
+            --repo "${{ github.repository }}" \
+            --title "Recall Gallery (build ${{ github.run_number }})" \
+            --notes "Install: open this page on your Android phone, tap recall-gallery.apk, then allow installing from your browser. Built from ${{ github.sha }}." \
+            --latest
