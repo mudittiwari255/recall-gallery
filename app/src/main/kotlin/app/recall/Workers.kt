@@ -234,7 +234,11 @@ class IndexWorker(context: Context, params: WorkerParameters) : CoroutineWorker(
             delay(100)
         }
         if (!acquired) return Result.retry()
-        return try { index() } finally { running.set(false) }
+        // Keep the CPU awake between photos while the screen is off
+        val wake = applicationContext.getSystemService(android.os.PowerManager::class.java)
+            .newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK, "recall:index")
+            .apply { setReferenceCounted(false); acquire(8 * 60 * 60 * 1000L) }
+        return try { index() } finally { running.set(false); if (wake.isHeld) wake.release() }
     }
 
     private suspend fun index(): Result = withContext(Dispatchers.Default) {

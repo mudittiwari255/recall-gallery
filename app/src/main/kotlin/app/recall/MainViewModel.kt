@@ -33,6 +33,8 @@ data class UiState(
     /** Photos that can be found by search right now. */
     val indexedIds: Set<Long> = emptySet(),
     val preparingPhoto: Boolean = false,
+    /** Full-screen dimmed setup view that keeps Recall in front, so Android lets it use the fast cores. */
+    val speedUp: Boolean = false,
     // welcome flow: 0 welcome, 1 privacy, 2 permissions, 3 folders, 4 download; null when finished
     val onboardingStep: Int? = 0,
     val permissionDenied: Boolean = false,
@@ -422,6 +424,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _state.update { it.copy(viewer = null, query = "", tab = Tab.SEARCH, searchMillis = System.currentTimeMillis() - t0) }
         }
     }
+
+    fun setSpeedUp(on: Boolean) = _state.update { it.copy(speedUp = on) }
 
     fun setTab(t: Tab) = _state.update { it.copy(tab = t, viewer = null) }
 

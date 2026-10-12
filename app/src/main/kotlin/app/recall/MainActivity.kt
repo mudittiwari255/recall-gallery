@@ -211,6 +211,7 @@ fun RecallScreen(vm: MainViewModel) {
     BackHandler(enabled = s.onboardingStep != null && s.onboardingStep!! > 0) { vm.backStep() }
     BackHandler(enabled = s.results != null && s.viewer == null) { vm.clearResults() }
     BackHandler(enabled = s.viewer != null) { vm.closeViewer() }
+    BackHandler(enabled = s.speedUp) { vm.setSpeedUp(false) }
 
     Box(Modifier.fillMaxSize()) {
         val main = s.onboardingStep == null && s.hasPermission
@@ -255,6 +256,7 @@ fun RecallScreen(vm: MainViewModel) {
             }
         }
         s.viewer?.let { Viewer(it, s, vm) }
+        if (s.speedUp) SpeedUpScreen(s, vm)
     }
 
     if (showSettings) {
@@ -438,6 +440,7 @@ private fun StatusStrip(s: UiState, vm: MainViewModel, askPermission: () -> Unit
                     )
                 }
                 TextButton(onClick = vm::stopIndexing) { Text("Pause") }
+                FilledTonalButton(onClick = { vm.setSpeedUp(true) }) { Text("Speed up") }
             }
             Spacer(Modifier.height(6.dp))
             if (s.indexTotal > 0) LinearProgressIndicator(progress = { s.indexDone.toFloat() / s.indexTotal }, modifier = Modifier.fillMaxWidth())
@@ -754,6 +757,58 @@ private fun FiltersSheet(s: UiState, vm: MainViewModel) {
                     )
                 }
             }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------- speed-up mode
+
+/**
+ * Keeps Recall on screen (dimmed almost to black) while the one-time setup runs. Android gives the app in front the
+ * fastest CPU cores; with the screen off, background work is moved to the slow, power-saving ones.
+ */
+@Composable
+private fun SpeedUpScreen(s: UiState, vm: MainViewModel) {
+    val activity = LocalContext.current as? android.app.Activity
+    androidx.compose.runtime.DisposableEffect(Unit) {
+        val window = activity?.window
+        val before = window?.attributes?.screenBrightness
+        window?.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        window?.attributes = window?.attributes?.apply { screenBrightness = 0.02f }
+        onDispose {
+            window?.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            window?.attributes = window?.attributes?.apply {
+                screenBrightness = before ?: android.view.WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+            }
+        }
+    }
+    // Leave automatically when there's nothing left to do
+    LaunchedEffect(s.indexing) { if (!s.indexing) { kotlinx.coroutines.delay(3000); if (!vm.state.value.indexing) vm.setSpeedUp(false) } }
+
+    Box(
+        Modifier.fillMaxSize().background(Color.Black).clickable { vm.setSpeedUp(false) }
+            .windowInsetsPadding(WindowInsets.statusBars).windowInsetsPadding(WindowInsets.navigationBars),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(Modifier.padding(32.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(
+                if (s.indexTotal > 0) "${(s.indexDone * 100L / s.indexTotal)}%" else "…",
+                color = Color(0xFF8A7A55), fontSize = 64.sp, fontWeight = FontWeight.Black,
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                if (s.indexTotal > 0) "${nf.format(s.indexDone)} of ${nf.format(s.indexTotal)} photos" else "Starting…",
+                color = Color(0xFF6E7186), style = MaterialTheme.typography.titleMedium,
+            )
+            if (s.msPerPhoto > 0) {
+                Text("${friendlyDuration(s.etaSec)} left", color = Color(0xFF6E7186), style = MaterialTheme.typography.bodyMedium)
+            }
+            Spacer(Modifier.height(32.dp))
+            Text(
+                "Running at full speed. Leave Recall open, ideally on the charger.\nTap anywhere to go back.",
+                color = Color(0xFF4F5266), style = MaterialTheme.typography.bodySmall,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            )
         }
     }
 }
